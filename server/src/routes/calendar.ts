@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listTasksByQuery } from "../db";
+import { DEFAULT_PROJECT_ID, listTasksByQuery } from "../db";
 
 function isDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -31,6 +31,10 @@ const router = Router();
 
 router.get("/daily", (req, res) => {
   const date = typeof req.query.date === "string" ? req.query.date : toUtcDateString(new Date());
+  const projectId =
+    typeof req.query.project_id === "string" && req.query.project_id.trim().length > 0
+      ? req.query.project_id.trim()
+      : req.apiKey?.project_id ?? DEFAULT_PROJECT_ID;
 
   if (!isDate(date)) {
     res.status(400).json({ error: "date must be YYYY-MM-DD" });
@@ -41,10 +45,12 @@ router.get("/daily", (req, res) => {
     `
       SELECT *
       FROM tasks
-      WHERE date(COALESCE(scheduled_at, started_at, completed_at, created_at)) = date(?)
+      WHERE project_id = ?
+        AND
+        date(COALESCE(scheduled_at, started_at, completed_at, created_at)) = date(?)
       ORDER BY datetime(COALESCE(scheduled_at, started_at, created_at)) ASC
     `,
-    [date],
+    [projectId, date],
   );
 
   res.json({ date, tasks });
@@ -52,6 +58,10 @@ router.get("/daily", (req, res) => {
 
 router.get("/weekly", (req, res) => {
   const date = typeof req.query.date === "string" ? req.query.date : toUtcDateString(new Date());
+  const projectId =
+    typeof req.query.project_id === "string" && req.query.project_id.trim().length > 0
+      ? req.query.project_id.trim()
+      : req.apiKey?.project_id ?? DEFAULT_PROJECT_ID;
 
   if (!isDate(date)) {
     res.status(400).json({ error: "date must be YYYY-MM-DD" });
@@ -74,11 +84,12 @@ router.get("/weekly", (req, res) => {
     `
       SELECT *
       FROM tasks
-      WHERE date(COALESCE(scheduled_at, started_at, completed_at, created_at))
+      WHERE project_id = ?
+        AND date(COALESCE(scheduled_at, started_at, completed_at, created_at))
         BETWEEN date(?) AND date(?)
       ORDER BY datetime(COALESCE(scheduled_at, started_at, created_at)) ASC
     `,
-    [weekStartStr, weekEndStr],
+    [projectId, weekStartStr, weekEndStr],
   );
 
   res.json({
@@ -90,6 +101,10 @@ router.get("/weekly", (req, res) => {
 
 router.get("/monthly", (req, res) => {
   const month = typeof req.query.date === "string" ? req.query.date : new Date().toISOString().slice(0, 7);
+  const projectId =
+    typeof req.query.project_id === "string" && req.query.project_id.trim().length > 0
+      ? req.query.project_id.trim()
+      : req.apiKey?.project_id ?? DEFAULT_PROJECT_ID;
 
   if (!isMonth(month)) {
     res.status(400).json({ error: "date must be YYYY-MM" });
@@ -115,11 +130,12 @@ router.get("/monthly", (req, res) => {
     `
       SELECT *
       FROM tasks
-      WHERE date(COALESCE(scheduled_at, started_at, completed_at, created_at))
+      WHERE project_id = ?
+        AND date(COALESCE(scheduled_at, started_at, completed_at, created_at))
         BETWEEN date(?) AND date(?)
       ORDER BY datetime(COALESCE(scheduled_at, started_at, created_at)) ASC
     `,
-    [from, to],
+    [projectId, from, to],
   );
 
   res.json({

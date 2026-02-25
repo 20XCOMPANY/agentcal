@@ -11,10 +11,8 @@ const AVAILABLE_EVENTS = [
   "task.completed",
   "task.failed",
   "agent.assigned",
-  "pr.opened",
-  "pr.merged",
-  "ci.passed",
-  "ci.failed",
+  "agent.registered",
+  "api_key.created",
 ];
 
 export function WebhooksPage() {
@@ -22,14 +20,13 @@ export function WebhooksPage() {
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState<Webhook | null>(null);
-  const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (currentProject) {
-      loadWebhooks();
+      void loadWebhooks();
     }
   }, [currentProject]);
 
@@ -44,10 +41,10 @@ export function WebhooksPage() {
   };
 
   const handleCreate = async () => {
-    if (!currentProject || !name.trim() || !url.trim() || selectedEvents.length === 0) return;
+    if (!currentProject || !url.trim() || selectedEvents.length === 0) return;
     setLoading(true);
     try {
-      await api.createWebhook(currentProject.id, { name, url, events: selectedEvents });
+      await api.createWebhook(currentProject.id, { url: url.trim(), events: selectedEvents, active: true });
       await loadWebhooks();
       closeModal();
     } catch (err) {
@@ -58,10 +55,10 @@ export function WebhooksPage() {
   };
 
   const handleUpdate = async () => {
-    if (!currentProject || !editingWebhook || !name.trim() || !url.trim()) return;
+    if (!editingWebhook || !url.trim() || selectedEvents.length === 0) return;
     setLoading(true);
     try {
-      await api.updateWebhook(currentProject.id, editingWebhook.id, { name, url, events: selectedEvents });
+      await api.updateWebhook(editingWebhook.id, { url: url.trim(), events: selectedEvents });
       await loadWebhooks();
       closeModal();
     } catch (err) {
@@ -72,9 +69,8 @@ export function WebhooksPage() {
   };
 
   const handleToggleActive = async (webhook: Webhook) => {
-    if (!currentProject) return;
     try {
-      await api.updateWebhook(currentProject.id, webhook.id, { active: !webhook.active });
+      await api.updateWebhook(webhook.id, { active: !webhook.active });
       await loadWebhooks();
     } catch (err) {
       console.error("Failed to toggle webhook:", err);
@@ -82,10 +78,9 @@ export function WebhooksPage() {
   };
 
   const handleDelete = async (webhookId: string) => {
-    if (!currentProject) return;
     if (!confirm("Delete this webhook? This cannot be undone.")) return;
     try {
-      await api.deleteWebhook(currentProject.id, webhookId);
+      await api.deleteWebhook(webhookId);
       await loadWebhooks();
     } catch (err) {
       console.error("Failed to delete webhook:", err);
@@ -94,7 +89,6 @@ export function WebhooksPage() {
 
   const openEditModal = (webhook: Webhook) => {
     setEditingWebhook(webhook);
-    setName(webhook.name);
     setUrl(webhook.url);
     setSelectedEvents(webhook.events);
     setModalOpen(true);
@@ -103,14 +97,13 @@ export function WebhooksPage() {
   const closeModal = () => {
     setModalOpen(false);
     setEditingWebhook(null);
-    setName("");
     setUrl("");
     setSelectedEvents([]);
   };
 
   const toggleEvent = (event: string) => {
     setSelectedEvents((prev) =>
-      prev.includes(event) ? prev.filter((e) => e !== event) : [...prev, event]
+      prev.includes(event) ? prev.filter((value) => value !== event) : [...prev, event],
     );
   };
 
@@ -149,7 +142,7 @@ export function WebhooksPage() {
             <div className="flex items-start justify-between">
               <div className="flex-1">
                 <div className="flex items-center gap-3">
-                  <h3 className="font-medium">{webhook.name}</h3>
+                  <h3 className="font-medium">{webhook.url}</h3>
                   <span
                     className={`rounded px-2 py-0.5 text-xs font-medium ${
                       webhook.active
@@ -160,9 +153,6 @@ export function WebhooksPage() {
                     {webhook.active ? "Active" : "Inactive"}
                   </span>
                 </div>
-                <code className="mt-1 block text-xs text-neutral-600 dark:text-neutral-400">
-                  {webhook.url}
-                </code>
                 <div className="mt-2 flex flex-wrap gap-1">
                   {webhook.events.map((event) => (
                     <span
@@ -210,24 +200,11 @@ export function WebhooksPage() {
         )}
       </div>
 
-      {/* Create/Edit Modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-full max-w-lg rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-800">
-            <h2 className="mb-4 text-lg font-semibold">
-              {editingWebhook ? "Edit Webhook" : "Create Webhook"}
-            </h2>
+            <h2 className="mb-4 text-lg font-semibold">{editingWebhook ? "Edit Webhook" : "Create Webhook"}</h2>
             <div className="space-y-4">
-              <div>
-                <label className="mb-1 block text-sm font-medium">Name</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-700"
-                  placeholder="Production Webhook"
-                />
-              </div>
               <div>
                 <label className="mb-1 block text-sm font-medium">URL</label>
                 <input
@@ -259,15 +236,12 @@ export function WebhooksPage() {
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-2">
-              <button
-                onClick={closeModal}
-                className="rounded px-4 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700"
-              >
+              <button onClick={closeModal} className="rounded px-4 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700">
                 Cancel
               </button>
               <button
                 onClick={editingWebhook ? handleUpdate : handleCreate}
-                disabled={loading || !name.trim() || !url.trim() || selectedEvents.length === 0}
+                disabled={loading || !url.trim() || selectedEvents.length === 0}
                 className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
               >
                 {loading ? "Saving..." : editingWebhook ? "Update" : "Create"}

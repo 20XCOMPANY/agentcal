@@ -19,6 +19,7 @@ export default function App() {
   const darkMode = useStore((s) => s.darkMode);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const loadProjects = useStore((s) => s.loadProjects);
+  const commandPaletteOpen = useStore((s) => s.commandPaletteOpen);
   const setCommandPaletteOpen = useStore((s) => s.setCommandPaletteOpen);
   const setCreateModalOpen = useStore((s) => s.setCreateModalOpen);
 
@@ -32,11 +33,19 @@ export default function App() {
     loadProjects();
   }, [loadProjects]);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts: Cmd/Ctrl+K|L opens command panel, Cmd/Ctrl+N opens new task.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // cmd+L or ctrl+L for quick new task
-      if ((e.metaKey || e.ctrlKey) && e.key === "l") {
+      const isMod = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+
+      if (isMod && (key === "k" || key === "l")) {
+        e.preventDefault();
+        setCommandPaletteOpen(!commandPaletteOpen);
+        return;
+      }
+
+      if (isMod && key === "n") {
         e.preventDefault();
         setCreateModalOpen(true);
       }
@@ -44,7 +53,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [setCreateModalOpen]);
+  }, [commandPaletteOpen, setCommandPaletteOpen, setCreateModalOpen]);
 
   return (
     <BrowserRouter>

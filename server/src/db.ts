@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 better-sqlite3 提供 SQLite 访问，依赖 ./types 提供行模型类型。
+ * [OUTPUT]: 对外提供 db 连接、schema/migration 初始化、行映射与通用查询辅助函数。
+ * [POS]: server 数据访问层核心入口，被 routes 与 services 共享。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -8,16 +14,40 @@ const DB_PATH = process.env.AGENTCAL_DB_PATH
   ? path.resolve(process.env.AGENTCAL_DB_PATH)
   : path.join(DATA_DIR, "agentcal.db");
 
+export const DEFAULT_PROJECT_ID = process.env.AGENTCAL_DEFAULT_PROJECT_ID ?? "project_default";
+export const DEFAULT_PROJECT_NAME = process.env.AGENTCAL_DEFAULT_PROJECT_NAME ?? "Default Workspace";
+
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 export const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
+db.pragma("busy_timeout = 5000");
+
+function hasColumn(table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function ensureColumn(table: string, column: string, sqlType: string): void {
+  if (!hasColumn(table, column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${sqlType}`);
+  }
+}
 
 function initSchema(): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
       name TEXT NOT NULL,
       type TEXT NOT NULL CHECK(type IN ('codex', 'claude')),
       status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle', 'busy', 'offline')),
@@ -33,6 +63,7 @@ function initSchema(): void {
 
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       description TEXT DEFAULT '',
       status TEXT NOT NULL DEFAULT 'queued'
@@ -91,21 +122,6 @@ function initSchema(): void {
       FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
     );
 
-    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-    CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_at ON tasks(scheduled_at);
-    CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id);
-    CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id);
-    CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id);
-
-    -- Multi-project workspace support
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-    );
-
     CREATE TABLE IF NOT EXISTS project_members (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -122,7 +138,7 @@ function initSchema(): void {
       agent_id TEXT NOT NULL UNIQUE,
       emoji TEXT DEFAULT '🤖',
       avatar_url TEXT DEFAULT '',
-      color TEXT DEFAULT '#6366f1',
+      color TEXT DEFAULT '#3b82f6',
       settings TEXT DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -131,11 +147,9 @@ function initSchema(): void {
 
     CREATE TABLE IF NOT EXISTS activities (
       id TEXT PRIMARY KEY,
-      project_id TEXT,
+      project_id TEXT NOT NULL,
       agent_id TEXT NOT NULL,
       action TEXT NOT NULL,
-      target_type TEXT,
-      target_id TEXT,
       details TEXT DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
@@ -159,18 +173,54 @@ function initSchema(): void {
       events TEXT DEFAULT '[]',
       active INTEGER DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_at ON tasks(scheduled_at);
+    CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_agents_project_id ON agents(project_id);
+    CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id);
     CREATE INDEX IF NOT EXISTS idx_activities_project_id ON activities(project_id);
     CREATE INDEX IF NOT EXISTS idx_activities_agent_id ON activities(agent_id);
     CREATE INDEX IF NOT EXISTS idx_activities_created_at ON activities(created_at);
     CREATE INDEX IF NOT EXISTS idx_api_keys_project_id ON api_keys(project_id);
     CREATE INDEX IF NOT EXISTS idx_webhooks_project_id ON webhooks(project_id);
   `);
+
+  ensureColumn("agents", "project_id", "TEXT REFERENCES projects(id) ON DELETE SET NULL");
+  ensureColumn("tasks", "project_id", "TEXT REFERENCES projects(id) ON DELETE CASCADE");
+  ensureColumn("webhooks", "updated_at", "TEXT");
+}
+
+function seedDefaults(): void {
+  const now = nowIso();
+  db.prepare(
+    `
+      INSERT INTO projects (id, name, description, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = COALESCE(projects.name, excluded.name),
+        updated_at = excluded.updated_at
+    `,
+  ).run(DEFAULT_PROJECT_ID, DEFAULT_PROJECT_NAME, "Default multi-agent workspace", now, now);
+
+  db.prepare("UPDATE agents SET project_id = ? WHERE project_id IS NULL OR project_id = ''").run(
+    DEFAULT_PROJECT_ID,
+  );
+  db.prepare("UPDATE tasks SET project_id = ? WHERE project_id IS NULL OR project_id = ''").run(
+    DEFAULT_PROJECT_ID,
+  );
+  db.prepare(
+    "UPDATE webhooks SET updated_at = COALESCE(updated_at, created_at, ?) WHERE updated_at IS NULL",
+  ).run(now);
 }
 
 initSchema();
+seedDefaults();
 
 const dependencyByTaskStmt = db.prepare(
   "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ? ORDER BY rowid ASC",
@@ -198,6 +248,7 @@ export function normalizeIso(value: string | null | undefined): string | null {
 export function mapAgentRow(row: AgentRow): Agent {
   return {
     id: row.id,
+    project_id: row.project_id,
     name: row.name,
     type: row.type,
     status: row.status,
@@ -216,6 +267,7 @@ export function mapAgentRow(row: AgentRow): Agent {
 export function mapTaskRow(row: TaskRow, dependsOn: string[] = []): Task {
   return {
     id: row.id,
+    project_id: row.project_id || DEFAULT_PROJECT_ID,
     title: row.title,
     description: row.description,
     status: row.status,

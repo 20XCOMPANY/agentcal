@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  DEFAULT_PROJECT_ID,
   db,
   getTaskById,
   getTaskDependencies,
@@ -27,6 +28,7 @@ interface ActiveTaskRecord {
 
 interface NormalizedTask {
   id: string;
+  projectId: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -192,6 +194,9 @@ function normalizeTask(record: ActiveTaskRecord): NormalizedTask | null {
 
   return {
     id,
+    projectId:
+      asString(readRecordValue(record, ["project_id", "projectId", "workspace_id", "workspaceId"])) ??
+      DEFAULT_PROJECT_ID,
     title,
     description,
     status,
@@ -279,10 +284,11 @@ function ensureAgent(nextTask: NormalizedTask, now: string): void {
   db.prepare(
     `
       INSERT INTO agents (
-        id, name, type, status, current_task_id, created_at, updated_at
+        id, project_id, name, type, status, current_task_id, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
+        project_id = excluded.project_id,
         name = COALESCE(excluded.name, agents.name),
         type = excluded.type,
         status = excluded.status,
@@ -291,6 +297,7 @@ function ensureAgent(nextTask: NormalizedTask, now: string): void {
     `,
   ).run(
     nextTask.agentId,
+    nextTask.projectId,
     nextTask.agentName ?? `Agent ${nextTask.agentId.slice(0, 8)}`,
     nextTask.agentType,
     status,
@@ -362,7 +369,7 @@ export async function syncFromActiveTasksFile(): Promise<SyncResult> {
   const upsertTaskStmt = db.prepare(
     `
       INSERT INTO tasks (
-        id, title, description, status, priority, agent_type, agent_id,
+        id, project_id, title, description, status, priority, agent_type, agent_id,
         branch, pr_url, pr_number, ci_status,
         review_codex, review_gemini, review_claude,
         retry_count, max_retries,
@@ -372,7 +379,7 @@ export async function syncFromActiveTasksFile(): Promise<SyncResult> {
         created_at, updated_at
       )
       VALUES (
-        @id, @title, @description, @status, @priority, @agent_type, @agent_id,
+        @id, @project_id, @title, @description, @status, @priority, @agent_type, @agent_id,
         @branch, @pr_url, @pr_number, @ci_status,
         'pending', 'pending', 'pending',
         @retry_count, @max_retries,
@@ -382,6 +389,7 @@ export async function syncFromActiveTasksFile(): Promise<SyncResult> {
         @created_at, @updated_at
       )
       ON CONFLICT(id) DO UPDATE SET
+        project_id = excluded.project_id,
         title = excluded.title,
         description = excluded.description,
         status = excluded.status,
@@ -430,6 +438,7 @@ export async function syncFromActiveTasksFile(): Promise<SyncResult> {
 
       upsertTaskStmt.run({
         id: normalized.id,
+        project_id: normalized.projectId,
         title: normalized.title,
         description: normalized.description,
         status: normalized.status,
