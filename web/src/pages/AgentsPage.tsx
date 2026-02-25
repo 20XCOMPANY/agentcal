@@ -24,6 +24,7 @@ const PRESET_EMOJIS = [
 export function AgentsPage() {
   const agents = useStore((s) => s.agents);
   const loadAgents = useStore((s) => s.loadAgents);
+  const currentProject = useStore((s) => s.currentProject);
 
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [emoji, setEmoji] = useState("");
@@ -32,7 +33,7 @@ export function AgentsPage() {
 
   useEffect(() => {
     loadAgents();
-  }, [loadAgents]);
+  }, [currentProject, loadAgents]);
 
   const statusDot: Record<string, string> = {
     idle: "bg-green-500",
@@ -222,7 +223,7 @@ export function AgentsPage() {
                       )}
                       style={{
                         backgroundColor: c,
-                        ringColor: c,
+                        boxShadow: color === c ? `0 0 0 2px ${c}` : undefined,
                       }}
                     />
                   ))}

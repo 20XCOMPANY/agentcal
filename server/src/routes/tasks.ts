@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { v4 as uuidv4 } from "uuid";
 import {
+  DEFAULT_PROJECT_ID,
   db,
   getTaskById,
   getTaskRowById,
@@ -10,6 +11,7 @@ import {
   nowIso,
 } from "../db";
 import { killAgent, redirectAgent, spawnAgent } from "../services/agent-swarm";
+import { recordActivity } from "../services/activity";
 import type {
   AgentRow,
   CIStatus,
@@ -95,6 +97,10 @@ function parseDependsOn(value: unknown): string[] {
   }
 
   return [...deduped];
+}
+
+function resolveProjectId(input: unknown, fallback: string): string {
+  return typeof input === "string" && input.trim().length > 0 ? input.trim() : fallback;
 }
 
 function parseReviews(value: unknown): TaskReviews {
@@ -239,9 +245,14 @@ function parseSpawnOutput(stdout: string): {
 const router = Router();
 
 router.get("/", (req, res) => {
-  const { status, date } = req.query;
+  const { status, date, project_id } = req.query;
   const where: string[] = [];
   const params: unknown[] = [];
+
+  const queryProjectId = typeof project_id === "string" ? project_id : undefined;
+  const effectiveProjectId = resolveProjectId(queryProjectId, req.apiKey?.project_id ?? DEFAULT_PROJECT_ID);
+  where.push("project_id = ?");
+  params.push(effectiveProjectId);
 
   if (status !== undefined) {
     if (typeof status !== "string" || !isTaskStatus(status)) {
@@ -365,21 +376,23 @@ router.post("/", (req, res) => {
   const id = uuidv4();
   const now = nowIso();
   const description = typeof body.description === "string" ? body.description : "";
+  const projectId = resolveProjectId(body.project_id, req.apiKey?.project_id ?? DEFAULT_PROJECT_ID);
 
   const tx = db.transaction(() => {
     db.prepare(
       `
         INSERT INTO tasks (
-          id, title, description, status, priority, agent_type, agent_id,
+          id, project_id, title, description, status, priority, agent_type, agent_id,
           review_codex, review_gemini, review_claude,
           retry_count, max_retries, scheduled_at,
           estimated_duration_min,
           created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
       `,
     ).run(
       id,
+      projectId,
       body.title,
       description,
       body.status ?? "queued",
@@ -416,6 +429,16 @@ router.post("/", (req, res) => {
   }
 
   broadcast("task:created", { task });
+  recordActivity({
+    projectId,
+    agentId: task.agent_id,
+    action: "task.created",
+    details: {
+      task_id: task.id,
+      title: task.title,
+      status: task.status,
+    },
+  });
   res.status(201).json(task);
 });
 
@@ -455,6 +478,7 @@ router.put("/:id", (req, res) => {
 
   let nextStatus: TaskStatus = existing.status;
   let nextAgentId: string | null = existing.agent_id;
+  let nextProjectId: string = existing.project_id || DEFAULT_PROJECT_ID;
   let nextStartedAt: string | null = normalizeIso(existing.started_at);
   let nextCompletedAt: string | null = normalizeIso(existing.completed_at);
   let nextActualDuration: number | null = existing.actual_duration_min;
@@ -506,6 +530,14 @@ router.put("/:id", (req, res) => {
       }
       nextAgentId = body.agent_id ? String(body.agent_id) : null;
       setUpdate("agent_id", nextAgentId);
+    }
+
+    if ("project_id" in body) {
+      if (typeof body.project_id !== "string" || body.project_id.trim().length === 0) {
+        throw new Error("project_id must be non-empty string");
+      }
+      nextProjectId = body.project_id.trim();
+      setUpdate("project_id", nextProjectId);
     }
 
     if ("branch" in body) {
@@ -655,10 +687,28 @@ router.put("/:id", (req, res) => {
 
   if (updatedTask.status === "completed") {
     broadcast("task:completed", { task: updatedTask });
+    recordActivity({
+      projectId: updatedTask.project_id,
+      agentId: updatedTask.agent_id,
+      action: "task.completed",
+      details: { task_id: updatedTask.id, title: updatedTask.title },
+    });
   } else if (updatedTask.status === "failed") {
     broadcast("task:failed", { task: updatedTask });
+    recordActivity({
+      projectId: updatedTask.project_id,
+      agentId: updatedTask.agent_id,
+      action: "task.failed",
+      details: { task_id: updatedTask.id, title: updatedTask.title },
+    });
   } else {
     broadcast("task:updated", { task: updatedTask });
+    recordActivity({
+      projectId: nextProjectId,
+      agentId: nextAgentId,
+      action: "task.updated",
+      details: { task_id: updatedTask.id, status: updatedTask.status },
+    });
   }
 
   res.json(updatedTask);
@@ -682,6 +732,13 @@ router.delete("/:id", (req, res) => {
   });
 
   tx();
+
+  recordActivity({
+    projectId: existing.project_id || DEFAULT_PROJECT_ID,
+    agentId: existing.agent_id,
+    action: "task.deleted",
+    details: { task_id: id, title: existing.title },
+  });
 
   res.status(204).send();
 });
@@ -737,6 +794,15 @@ router.post("/:id/spawn", async (req, res, next) => {
     }
 
     broadcast("task:updated", { task: updatedTask });
+    recordActivity({
+      projectId: updatedTask.project_id,
+      agentId: updatedTask.agent_id,
+      action: "task.started",
+      details: {
+        task_id: updatedTask.id,
+        tmux_session: updatedTask.tmux_session,
+      },
+    });
     res.json({ task: updatedTask, execution });
   } catch (error) {
     next(error);
@@ -780,6 +846,12 @@ router.post("/:id/redirect", async (req, res, next) => {
 
     taskEvent(id, "redirected", null, body.message.trim());
     broadcast("log:append", { task_id: id, line: body.message.trim() });
+    recordActivity({
+      projectId: task.project_id,
+      agentId: task.agent_id,
+      action: "task.redirected",
+      details: { task_id: id, message: body.message.trim() },
+    });
 
     res.json({ ok: true, execution });
   } catch (error) {
@@ -831,6 +903,12 @@ router.post("/:id/kill", async (req, res, next) => {
     }
 
     broadcast("task:failed", { task, error: "Task killed manually" });
+    recordActivity({
+      projectId: task.project_id,
+      agentId: task.agent_id,
+      action: "task.failed",
+      details: { task_id: task.id, reason: "killed" },
+    });
     res.json({ task, execution });
   } catch (error) {
     next(error);
@@ -879,6 +957,12 @@ router.post("/:id/retry", (req, res) => {
   }
 
   broadcast("task:updated", { task });
+  recordActivity({
+    projectId: task.project_id,
+    agentId: task.agent_id,
+    action: "task.retried",
+    details: { task_id: task.id, retry_count: task.retry_count },
+  });
   res.json(task);
 });
 

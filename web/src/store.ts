@@ -16,7 +16,7 @@ interface AppState {
   projects: Project[];
   currentProject: Project | null;
   loadProjects: () => Promise<void>;
-  setCurrentProject: (p: Project) => void;
+  setCurrentProject: (p: Project | null) => void;
 
   // Activities
   activities: Activity[];
@@ -55,6 +55,7 @@ interface AppState {
   // Upsert helpers for WS
   upsertTask: (t: Task) => void;
   upsertAgent: (a: Agent) => void;
+  prependActivity: (a: Activity) => void;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -77,7 +78,10 @@ export const useStore = create<AppState>((set, get) => ({
   loadProjects: async () => {
     try {
       const projects = await api.fetchProjects();
-      set({ projects, currentProject: projects[0] || null });
+      const currentProjectId = get().currentProject?.id;
+      const nextCurrent =
+        projects.find((project) => project.id === currentProjectId) ?? projects[0] ?? null;
+      set({ projects, currentProject: nextCurrent });
     } catch {
       set({ projects: [], currentProject: null });
     }
@@ -104,18 +108,22 @@ export const useStore = create<AppState>((set, get) => ({
   setCalendarDate: (d) => set({ calendarDate: d }),
   calendarTasks: [],
   loadCalendarTasks: async () => {
-    const { calendarView, calendarDate } = get();
+    const { calendarView, calendarDate, currentProject } = get();
+    if (!currentProject) {
+      set({ calendarTasks: [] });
+      return;
+    }
     try {
       let tasks: Task[];
       if (calendarView === "week") {
         const d = format(startOfWeek(calendarDate, { weekStartsOn: 1 }), "yyyy-MM-dd");
-        tasks = await api.fetchWeekly(d);
+        tasks = await api.fetchWeekly(d, currentProject.id);
       } else if (calendarView === "month") {
         const d = format(startOfMonth(calendarDate), "yyyy-MM");
-        tasks = await api.fetchMonthly(d);
+        tasks = await api.fetchMonthly(d, currentProject.id);
       } else {
         const d = format(calendarDate, "yyyy-MM-dd");
-        tasks = await api.fetchDaily(d);
+        tasks = await api.fetchDaily(d, currentProject.id);
       }
       set({ calendarTasks: tasks });
     } catch {
@@ -125,8 +133,16 @@ export const useStore = create<AppState>((set, get) => ({
 
   tasks: [],
   loadTasks: async (params) => {
+    const currentProject = get().currentProject;
+    if (!currentProject) {
+      set({ tasks: [] });
+      return;
+    }
     try {
-      const tasks = await api.fetchTasks(params);
+      const tasks = await api.fetchTasks({
+        ...(params ?? {}),
+        project_id: currentProject.id,
+      });
       set({ tasks });
     } catch {
       set({ tasks: [] });
@@ -145,8 +161,13 @@ export const useStore = create<AppState>((set, get) => ({
 
   agents: [],
   loadAgents: async () => {
+    const currentProject = get().currentProject;
+    if (!currentProject) {
+      set({ agents: [] });
+      return;
+    }
     try {
-      const agents = await api.fetchAgents();
+      const agents = await api.fetchAgents(currentProject.id);
       set({ agents });
     } catch {
       set({ agents: [] });
@@ -160,7 +181,8 @@ export const useStore = create<AppState>((set, get) => ({
         idx >= 0
           ? s.calendarTasks.map((x) => (x.id === t.id ? t : x))
           : [...s.calendarTasks, t];
-      const tasks = s.tasks.map((x) => (x.id === t.id ? t : x));
+      const taskIdx = s.tasks.findIndex((x) => x.id === t.id);
+      const tasks = taskIdx >= 0 ? s.tasks.map((x) => (x.id === t.id ? t : x)) : [...s.tasks, t];
       const selectedTask =
         s.selectedTask?.id === t.id ? t : s.selectedTask;
       return { calendarTasks, tasks, selectedTask };
@@ -174,4 +196,8 @@ export const useStore = create<AppState>((set, get) => ({
           : [...s.agents, a];
       return { agents };
     }),
+  prependActivity: (activity) =>
+    set((s) => ({
+      activities: [activity, ...s.activities.filter((item) => item.id !== activity.id)].slice(0, 100),
+    })),
 }));

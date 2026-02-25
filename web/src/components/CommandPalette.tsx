@@ -2,12 +2,13 @@ import { useEffect, useState, useRef } from "react";
 import { useStore } from "@/store";
 import { useNavigate } from "react-router-dom";
 import { Search, Calendar, Bot, BarChart3, Settings, FolderKanban, Key, Webhook, Plus } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import clsx from "clsx";
 
 interface Command {
   id: string;
   label: string;
-  icon: React.ComponentType<{ size: number }>;
+  icon: LucideIcon;
   action: () => void;
   keywords?: string[];
 }
@@ -150,21 +151,20 @@ export function CommandPalette() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setOpen(!open);
-      }
-
       if (!open) return;
 
       if (e.key === "Escape") {
         setOpen(false);
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelectedIndex((i) => (i + 1) % filteredCommands.length);
+        if (filteredCommands.length > 0) {
+          setSelectedIndex((i) => (i + 1) % filteredCommands.length);
+        }
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        setSelectedIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
+        if (filteredCommands.length > 0) {
+          setSelectedIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
+        }
       } else if (e.key === "Enter") {
         e.preventDefault();
         filteredCommands[selectedIndex]?.action();
@@ -173,7 +173,7 @@ export function CommandPalette() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, selectedIndex, filteredCommands, setOpen]);
+  }, [filteredCommands, open, selectedIndex, setOpen]);
 
   if (!open) return null;
 

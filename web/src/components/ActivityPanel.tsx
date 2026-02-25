@@ -5,13 +5,21 @@ import { format } from "date-fns";
 import clsx from "clsx";
 
 const activityIcons: Record<string, string> = {
-  task_created: "📝",
-  task_completed: "✅",
-  task_failed: "❌",
-  agent_assigned: "🤖",
-  pr_opened: "🔀",
-  pr_merged: "✨",
+  "task.created": "📝",
+  "task.updated": "🛠",
+  "task.started": "▶️",
+  "task.completed": "✅",
+  "task.failed": "❌",
+  "agent.assigned": "🤖",
+  "agent.registered": "🤖",
+  "webhook.created": "🪝",
+  "api_key.created": "🔑",
+  "auth.token_created": "🔐",
 };
+
+function toTitle(action: string): string {
+  return action.replaceAll(".", " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
 
 export function ActivityPanel() {
   const open = useStore((s) => s.activityPanelOpen);
@@ -72,13 +80,13 @@ export function ActivityPanel() {
                 <div key={activity.id} className="p-4 hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
                   <div className="flex gap-3">
                     <div className="flex-shrink-0 text-xl">
-                      {activityIcons[activity.type] || "📌"}
+                      {activityIcons[activity.action] || "📌"}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium">{activity.title}</p>
-                      {activity.description && (
+                      <p className="text-sm font-medium">{toTitle(activity.action)}</p>
+                      {activity.agent_name && (
                         <p className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
-                          {activity.description}
+                          by {activity.agent_name}
                         </p>
                       )}
                       <p className="mt-1 text-xs text-neutral-500">
