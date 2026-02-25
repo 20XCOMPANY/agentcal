@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "@/store";
 import * as api from "@/api/client";
-import { Plus, Trash2, Copy, Eye, EyeOff } from "lucide-react";
+import { Plus, Trash2, Copy } from "lucide-react";
 import { format } from "date-fns";
 import type { ApiKey } from "@/types";
 
@@ -9,14 +9,13 @@ export function ApiKeysPage() {
   const currentProject = useStore((s) => s.currentProject);
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [name, setName] = useState("");
+  const [label, setLabel] = useState("");
   const [loading, setLoading] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
-  const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (currentProject) {
-      loadKeys();
+      void loadKeys();
     }
   }, [currentProject]);
 
@@ -31,14 +30,13 @@ export function ApiKeysPage() {
   };
 
   const handleCreate = async () => {
-    if (!currentProject || !name.trim()) return;
+    if (!currentProject || !label.trim()) return;
     setLoading(true);
     try {
-      const result = await api.createApiKey(currentProject.id, name);
-      // Backend should return the full key on creation
-      setNewKey((result as any).key || "key_hidden");
+      const result = await api.createApiKey(currentProject.id, label.trim());
+      setNewKey(result.key);
       await loadKeys();
-      setName("");
+      setLabel("");
     } catch (err) {
       console.error("Failed to create API key:", err);
     } finally {
@@ -59,18 +57,6 @@ export function ApiKeysPage() {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-  };
-
-  const toggleReveal = (keyId: string) => {
-    setRevealedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(keyId)) {
-        next.delete(keyId);
-      } else {
-        next.add(keyId);
-      }
-      return next;
-    });
   };
 
   if (!currentProject) {
@@ -107,28 +93,19 @@ export function ApiKeysPage() {
           >
             <div className="flex-1">
               <div className="flex items-center gap-3">
-                <h3 className="font-medium">{key.name}</h3>
+                <h3 className="font-medium">{key.label || "Untitled Key"}</h3>
                 <code className="rounded bg-neutral-100 px-2 py-0.5 text-xs font-mono dark:bg-neutral-700">
-                  {revealedKeys.has(key.id) ? key.key_prefix : `${key.key_prefix}...`}
+                  {key.key}
                 </code>
               </div>
               <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
                 Created {format(new Date(key.created_at), "MMM d, yyyy")}
-                {key.last_used_at && (
-                  <> · Last used {format(new Date(key.last_used_at), "MMM d, yyyy")}</>
-                )}
+                {key.expires_at && <> · Expires {format(new Date(key.expires_at), "MMM d, yyyy")}</>}
               </div>
             </div>
             <div className="flex gap-2">
               <button
-                onClick={() => toggleReveal(key.id)}
-                className="rounded p-2 text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-700"
-                title={revealedKeys.has(key.id) ? "Hide" : "Reveal"}
-              >
-                {revealedKeys.has(key.id) ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-              <button
-                onClick={() => copyToClipboard(key.key_prefix)}
+                onClick={() => copyToClipboard(key.key)}
                 className="rounded p-2 text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-700"
                 title="Copy"
               >
@@ -151,7 +128,6 @@ export function ApiKeysPage() {
         )}
       </div>
 
-      {/* Create Modal */}
       {createModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-800">
@@ -160,7 +136,7 @@ export function ApiKeysPage() {
               <div className="space-y-4">
                 <div className="rounded bg-yellow-50 p-3 dark:bg-yellow-900/20">
                   <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                    Save this key now. You won't be able to see it again.
+                    Save this key now. You won&apos;t be able to see it again.
                   </p>
                 </div>
                 <div>
@@ -191,11 +167,11 @@ export function ApiKeysPage() {
             ) : (
               <div className="space-y-4">
                 <div>
-                  <label className="mb-1 block text-sm font-medium">Key Name</label>
+                  <label className="mb-1 block text-sm font-medium">Key Label</label>
                   <input
                     type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
                     className="w-full rounded border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-700"
                     placeholder="Production API Key"
                   />
@@ -204,7 +180,7 @@ export function ApiKeysPage() {
                   <button
                     onClick={() => {
                       setCreateModalOpen(false);
-                      setName("");
+                      setLabel("");
                     }}
                     className="rounded px-4 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700"
                   >
@@ -212,7 +188,7 @@ export function ApiKeysPage() {
                   </button>
                   <button
                     onClick={handleCreate}
-                    disabled={loading || !name.trim()}
+                    disabled={loading || !label.trim()}
                     className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
                   >
                     {loading ? "Creating..." : "Create"}

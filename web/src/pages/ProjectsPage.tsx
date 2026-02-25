@@ -58,9 +58,6 @@ export function ProjectsPage() {
     try {
       await api.deleteProject(id);
       await loadProjects();
-      if (currentProject?.id === id) {
-        setCurrentProject(projects[0] || null);
-      }
     } catch (err) {
       console.error("Failed to delete project:", err);
     }

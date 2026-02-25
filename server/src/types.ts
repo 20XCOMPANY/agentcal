@@ -22,6 +22,7 @@ export interface AgentStats {
 
 export interface Agent {
   id: string;
+  project_id: string | null;
   name: string;
   type: AgentType;
   status: AgentStatus;
@@ -39,6 +40,7 @@ export interface TaskReviews {
 
 export interface Task {
   id: string;
+  project_id: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -67,6 +69,7 @@ export interface Task {
 
 export interface AgentRow {
   id: string;
+  project_id: string | null;
   name: string;
   type: AgentType;
   status: AgentStatus;
@@ -81,6 +84,7 @@ export interface AgentRow {
 
 export interface TaskRow {
   id: string;
+  project_id: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -154,13 +158,16 @@ export interface AgentProfile {
 
 export interface Activity {
   id: string;
-  project_id: string | null;
-  agent_id: string;
+  project_id: string;
+  agent_id: string | null;
   action: string;
-  target_type: string | null;
-  target_id: string | null;
   details: Record<string, unknown>;
   created_at: string;
+}
+
+export interface ActivityFeedItem extends Activity {
+  agent_name?: string;
+  agent_type?: AgentType;
 }
 
 export interface ApiKey {

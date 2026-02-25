@@ -7,6 +7,7 @@ import type { TaskPriority, AgentType, CreateTaskPayload } from "@/types";
 export function CreateTaskModal() {
   const open = useStore((s) => s.createModalOpen);
   const setOpen = useStore((s) => s.setCreateModalOpen);
+  const currentProject = useStore((s) => s.currentProject);
   const upsertTask = useStore((s) => s.upsertTask);
   const loadCalendarTasks = useStore((s) => s.loadCalendarTasks);
 
@@ -29,7 +30,7 @@ export function CreateTaskModal() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || !currentProject) return;
     setSubmitting(true);
     try {
       const payload: CreateTaskPayload = {
@@ -37,7 +38,8 @@ export function CreateTaskModal() {
         description,
         priority,
         agent_type: agentType,
-        scheduled_at: scheduledAt || null,
+        project_id: currentProject.id,
+        scheduled_at: scheduledAt || undefined,
       };
       const task = await api.createTask(payload);
       upsertTask(task);

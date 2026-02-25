@@ -34,11 +34,12 @@ export function CalendarPage() {
   const setSelectedTask = useStore((s) => s.setSelectedTask);
   const setCreateModalOpen = useStore((s) => s.setCreateModalOpen);
   const loadAgents = useStore((s) => s.loadAgents);
+  const currentProject = useStore((s) => s.currentProject);
 
   useEffect(() => {
     loadCalendarTasks();
     loadAgents();
-  }, [calendarView, calendarDate]);
+  }, [calendarView, calendarDate, currentProject, loadAgents, loadCalendarTasks]);
 
   function navigate(dir: -1 | 1) {
     if (calendarView === "week")
