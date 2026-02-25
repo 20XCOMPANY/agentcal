@@ -1,0 +1,17 @@
+{
+  "name": "agentcal",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @agentcal/server dev",
+    "build": "pnpm --filter @agentcal/server build",
+    "start": "pnpm --filter @agentcal/server start",
+    "typecheck": "pnpm --filter @agentcal/server typecheck"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}

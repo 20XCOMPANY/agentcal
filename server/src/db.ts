@@ -1,0 +1,281 @@
+import fs from "node:fs";
+import path from "node:path";
+import Database from "better-sqlite3";
+import type { Agent, AgentRow, Task, TaskRow } from "./types";
+
+const DATA_DIR = path.resolve(__dirname, "..", "data");
+const DB_PATH = process.env.AGENTCAL_DB_PATH
+  ? path.resolve(process.env.AGENTCAL_DB_PATH)
+  : path.join(DATA_DIR, "agentcal.db");
+
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+export const db = new Database(DB_PATH);
+db.pragma("journal_mode = WAL");
+db.pragma("foreign_keys = ON");
+
+function initSchema(): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agents (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('codex', 'claude')),
+      status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle', 'busy', 'offline')),
+      current_task_id TEXT,
+      total_tasks INTEGER DEFAULT 0,
+      success_count INTEGER DEFAULT 0,
+      fail_count INTEGER DEFAULT 0,
+      avg_duration_min REAL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      FOREIGN KEY (current_task_id) REFERENCES tasks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'queued'
+        CHECK(status IN ('queued', 'running', 'pr_open', 'completed', 'failed', 'archived')),
+      priority TEXT NOT NULL DEFAULT 'medium'
+        CHECK(priority IN ('low', 'medium', 'high', 'urgent')),
+      agent_type TEXT NOT NULL DEFAULT 'codex'
+        CHECK(agent_type IN ('codex', 'claude')),
+      agent_id TEXT,
+      branch TEXT,
+      pr_url TEXT,
+      pr_number INTEGER,
+      ci_status TEXT CHECK(ci_status IN ('pending', 'passing', 'failing')),
+      review_codex TEXT DEFAULT 'pending' CHECK(review_codex IN ('pending', 'approved', 'rejected')),
+      review_gemini TEXT DEFAULT 'pending' CHECK(review_gemini IN ('pending', 'approved', 'rejected')),
+      review_claude TEXT DEFAULT 'pending' CHECK(review_claude IN ('pending', 'approved', 'rejected')),
+      retry_count INTEGER DEFAULT 0,
+      max_retries INTEGER DEFAULT 3,
+      scheduled_at TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      estimated_duration_min INTEGER DEFAULT 30,
+      actual_duration_min INTEGER,
+      tmux_session TEXT,
+      worktree_path TEXT,
+      log_path TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      FOREIGN KEY (agent_id) REFERENCES agents(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS task_dependencies (
+      task_id TEXT NOT NULL,
+      depends_on_task_id TEXT NOT NULL,
+      PRIMARY KEY (task_id, depends_on_task_id),
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY (depends_on_task_id) REFERENCES tasks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS task_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      level TEXT DEFAULT 'info' CHECK(level IN ('info', 'warn', 'error', 'debug')),
+      message TEXT NOT NULL,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS task_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      old_value TEXT,
+      new_value TEXT,
+      timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_at ON tasks(scheduled_at);
+    CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id);
+
+    -- Multi-project workspace support
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS project_members (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('owner', 'member')),
+      joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+      UNIQUE(project_id, agent_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_profiles (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL UNIQUE,
+      emoji TEXT DEFAULT '🤖',
+      avatar_url TEXT DEFAULT '',
+      color TEXT DEFAULT '#6366f1',
+      settings TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS activities (
+      id TEXT PRIMARY KEY,
+      project_id TEXT,
+      agent_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target_type TEXT,
+      target_id TEXT,
+      details TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      key TEXT NOT NULL UNIQUE,
+      label TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      expires_at TEXT,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      url TEXT NOT NULL,
+      events TEXT DEFAULT '[]',
+      active INTEGER DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_activities_project_id ON activities(project_id);
+    CREATE INDEX IF NOT EXISTS idx_activities_agent_id ON activities(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_activities_created_at ON activities(created_at);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_project_id ON api_keys(project_id);
+    CREATE INDEX IF NOT EXISTS idx_webhooks_project_id ON webhooks(project_id);
+  `);
+}
+
+initSchema();
+
+const dependencyByTaskStmt = db.prepare(
+  "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ? ORDER BY rowid ASC",
+);
+const taskByIdStmt = db.prepare("SELECT * FROM tasks WHERE id = ?");
+
+export function nowIso(): string {
+  return new Date().toISOString();
+}
+
+export function normalizeIso(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString();
+}
+
+export function mapAgentRow(row: AgentRow): Agent {
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    status: row.status,
+    current_task_id: row.current_task_id,
+    stats: {
+      total_tasks: Number(row.total_tasks) || 0,
+      success_count: Number(row.success_count) || 0,
+      fail_count: Number(row.fail_count) || 0,
+      avg_duration_min: Number(row.avg_duration_min) || 0,
+    },
+    created_at: normalizeIso(row.created_at) ?? nowIso(),
+    updated_at: normalizeIso(row.updated_at) ?? nowIso(),
+  };
+}
+
+export function mapTaskRow(row: TaskRow, dependsOn: string[] = []): Task {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    priority: row.priority,
+    agent_type: row.agent_type,
+    agent_id: row.agent_id,
+    branch: row.branch,
+    pr_url: row.pr_url,
+    pr_number: row.pr_number,
+    ci_status: row.ci_status,
+    reviews: {
+      codex: row.review_codex,
+      gemini: row.review_gemini,
+      claude: row.review_claude,
+    },
+    retry_count: Number(row.retry_count) || 0,
+    max_retries: Number(row.max_retries) || 3,
+    depends_on: dependsOn,
+    scheduled_at: normalizeIso(row.scheduled_at),
+    started_at: normalizeIso(row.started_at),
+    completed_at: normalizeIso(row.completed_at),
+    estimated_duration_min: Number(row.estimated_duration_min) || 30,
+    actual_duration_min:
+      row.actual_duration_min === null || row.actual_duration_min === undefined
+        ? null
+        : Number(row.actual_duration_min),
+    tmux_session: row.tmux_session,
+    worktree_path: row.worktree_path,
+    log_path: row.log_path,
+    created_at: normalizeIso(row.created_at) ?? nowIso(),
+    updated_at: normalizeIso(row.updated_at) ?? nowIso(),
+  };
+}
+
+export function getTaskDependencies(taskId: string): string[] {
+  const rows = dependencyByTaskStmt.all(taskId) as Array<{ depends_on_task_id: string }>;
+  return rows.map((row) => row.depends_on_task_id);
+}
+
+export function getTaskRowById(taskId: string): TaskRow | null {
+  const row = taskByIdStmt.get(taskId) as TaskRow | undefined;
+  return row ?? null;
+}
+
+export function getTaskById(taskId: string): Task | null {
+  const row = getTaskRowById(taskId);
+  if (!row) {
+    return null;
+  }
+
+  return mapTaskRow(row, getTaskDependencies(taskId));
+}
+
+export function listTasksByQuery(sql: string, params: unknown[] = []): Task[] {
+  const rows = db.prepare(sql).all(...params) as TaskRow[];
+  return rows.map((row) => mapTaskRow(row, getTaskDependencies(row.id)));
+}
+
+export function closeDb(): void {
+  db.close();
+}
+
+export { DB_PATH };
