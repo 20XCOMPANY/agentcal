@@ -177,6 +177,12 @@ function initSchema(): void {
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS system_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_at ON tasks(scheduled_at);
@@ -225,6 +231,15 @@ seedDefaults();
 const dependencyByTaskStmt = db.prepare(
   "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = ? ORDER BY rowid ASC",
 );
+const unmetDependencyByTaskStmt = db.prepare(
+  `
+    SELECT td.depends_on_task_id
+    FROM task_dependencies td
+    JOIN tasks t ON t.id = td.depends_on_task_id
+    WHERE td.task_id = ? AND t.status != 'completed'
+    ORDER BY td.rowid ASC
+  `,
+);
 const taskByIdStmt = db.prepare("SELECT * FROM tasks WHERE id = ?");
 
 export function nowIso(): string {
@@ -264,13 +279,14 @@ export function mapAgentRow(row: AgentRow): Agent {
   };
 }
 
-export function mapTaskRow(row: TaskRow, dependsOn: string[] = []): Task {
+export function mapTaskRow(row: TaskRow, dependsOn: string[] = [], blockedBy: string[] = []): Task {
+  const status = row.status === "queued" && blockedBy.length > 0 ? "blocked" : row.status;
   return {
     id: row.id,
     project_id: row.project_id || DEFAULT_PROJECT_ID,
     title: row.title,
     description: row.description,
-    status: row.status,
+    status,
     priority: row.priority,
     agent_type: row.agent_type,
     agent_id: row.agent_id,
@@ -286,6 +302,7 @@ export function mapTaskRow(row: TaskRow, dependsOn: string[] = []): Task {
     retry_count: Number(row.retry_count) || 0,
     max_retries: Number(row.max_retries) || 3,
     depends_on: dependsOn,
+    blocked_by: blockedBy,
     scheduled_at: normalizeIso(row.scheduled_at),
     started_at: normalizeIso(row.started_at),
     completed_at: normalizeIso(row.completed_at),
@@ -307,6 +324,11 @@ export function getTaskDependencies(taskId: string): string[] {
   return rows.map((row) => row.depends_on_task_id);
 }
 
+export function getUnmetTaskDependencies(taskId: string): string[] {
+  const rows = unmetDependencyByTaskStmt.all(taskId) as Array<{ depends_on_task_id: string }>;
+  return rows.map((row) => row.depends_on_task_id);
+}
+
 export function getTaskRowById(taskId: string): TaskRow | null {
   const row = taskByIdStmt.get(taskId) as TaskRow | undefined;
   return row ?? null;
@@ -318,12 +340,18 @@ export function getTaskById(taskId: string): Task | null {
     return null;
   }
 
-  return mapTaskRow(row, getTaskDependencies(taskId));
+  const dependsOn = getTaskDependencies(taskId);
+  const blockedBy = getUnmetTaskDependencies(taskId);
+  return mapTaskRow(row, dependsOn, blockedBy);
 }
 
 export function listTasksByQuery(sql: string, params: unknown[] = []): Task[] {
   const rows = db.prepare(sql).all(...params) as TaskRow[];
-  return rows.map((row) => mapTaskRow(row, getTaskDependencies(row.id)));
+  return rows.map((row) => {
+    const dependsOn = getTaskDependencies(row.id);
+    const blockedBy = getUnmetTaskDependencies(row.id);
+    return mapTaskRow(row, dependsOn, blockedBy);
+  });
 }
 
 export function closeDb(): void {

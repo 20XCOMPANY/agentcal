@@ -10,6 +10,7 @@ import {
   DEFAULT_PROJECT_ID,
   db,
   getTaskById,
+  getTaskDependencies,
   getTaskRowById,
   listTasksByQuery,
   mapAgentRow,
@@ -19,18 +20,32 @@ import {
 import { killAgent, redirectAgent, spawnAgent } from "../services/agent-swarm";
 import { recordActivity } from "../services/activity";
 import { parsePromptToTaskDraft } from "../services/prompt-parser";
+import { canTaskStart, getQueueStatus, triggerTaskScheduler } from "../services/task-scheduler";
 import type {
   AgentRow,
   CIStatus,
+  PersistedTaskStatus,
   PromptTaskDraft,
   ReviewStatus,
   TaskPriority,
   TaskReviews,
   TaskStatus,
+  TaskDependencyEdge,
+  TaskDependencyTree,
+  TaskDependencyNode,
 } from "../types";
 import { broadcast } from "../ws";
 
-const TASK_STATUSES: TaskStatus[] = [
+const TASK_QUERY_STATUSES: TaskStatus[] = [
+  "blocked",
+  "queued",
+  "running",
+  "pr_open",
+  "completed",
+  "failed",
+  "archived",
+];
+const TASK_MUTABLE_STATUSES: PersistedTaskStatus[] = [
   "queued",
   "running",
   "pr_open",
@@ -43,7 +58,11 @@ const CI_STATUSES: Exclude<CIStatus, null>[] = ["pending", "passing", "failing"]
 const REVIEW_STATUSES: ReviewStatus[] = ["pending", "approved", "rejected"];
 
 function isTaskStatus(value: unknown): value is TaskStatus {
-  return typeof value === "string" && TASK_STATUSES.includes(value as TaskStatus);
+  return typeof value === "string" && TASK_QUERY_STATUSES.includes(value as TaskStatus);
+}
+
+function isMutableTaskStatus(value: unknown): value is PersistedTaskStatus {
+  return typeof value === "string" && TASK_MUTABLE_STATUSES.includes(value as PersistedTaskStatus);
 }
 
 function isTaskPriority(value: unknown): value is TaskPriority {
@@ -107,6 +126,130 @@ function parseDependsOn(value: unknown): string[] {
   return [...deduped];
 }
 
+function assertDependencyTasksExist(dependsOn: string[], projectId: string): void {
+  if (dependsOn.length === 0) {
+    return;
+  }
+
+  const placeholders = dependsOn.map(() => "?").join(", ");
+  const rows = db
+    .prepare(`SELECT id, project_id FROM tasks WHERE id IN (${placeholders})`)
+    .all(...dependsOn) as Array<{ id: string; project_id: string }>;
+
+  const found = new Set(rows.map((row) => row.id));
+  const missing = dependsOn.filter((taskId) => !found.has(taskId));
+  if (missing.length > 0) {
+    throw new Error(`depends_on contains unknown task ids: ${missing.join(", ")}`);
+  }
+
+  const crossProject = rows.filter((row) => row.project_id !== projectId).map((row) => row.id);
+  if (crossProject.length > 0) {
+    throw new Error(`depends_on must reference tasks in same project: ${crossProject.join(", ")}`);
+  }
+}
+
+function hasDependencyPath(fromTaskId: string, toTaskId: string): boolean {
+  const row = db
+    .prepare(
+      `
+        WITH RECURSIVE walk(task_id) AS (
+          SELECT ?
+          UNION
+          SELECT td.depends_on_task_id
+          FROM task_dependencies td
+          JOIN walk ON td.task_id = walk.task_id
+        )
+        SELECT 1 AS found
+        FROM walk
+        WHERE task_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(fromTaskId, toTaskId) as { found: number } | undefined;
+
+  return Boolean(row?.found);
+}
+
+function validateTaskDependencies(taskId: string, projectId: string, dependsOn: string[]): void {
+  if (dependsOn.includes(taskId)) {
+    throw new Error("task cannot depend on itself");
+  }
+
+  assertDependencyTasksExist(dependsOn, projectId);
+
+  for (const dependencyId of dependsOn) {
+    if (hasDependencyPath(dependencyId, taskId)) {
+      throw new Error(`dependency cycle detected: ${taskId} -> ${dependencyId} -> ${taskId}`);
+    }
+  }
+}
+
+function buildTaskDependencyTree(taskId: string): TaskDependencyTree {
+  const edges = db
+    .prepare(
+      `
+        WITH RECURSIVE dep_tree(from_task_id, to_task_id, depth, path) AS (
+          SELECT
+            td.task_id,
+            td.depends_on_task_id,
+            1 AS depth,
+            td.task_id || '>' || td.depends_on_task_id AS path
+          FROM task_dependencies td
+          WHERE td.task_id = ?
+
+          UNION ALL
+
+          SELECT
+            td.task_id,
+            td.depends_on_task_id,
+            dep_tree.depth + 1,
+            dep_tree.path || '>' || td.depends_on_task_id
+          FROM task_dependencies td
+          JOIN dep_tree ON td.task_id = dep_tree.to_task_id
+          WHERE instr(dep_tree.path, td.depends_on_task_id) = 0
+        )
+        SELECT from_task_id, to_task_id, depth
+        FROM dep_tree
+        ORDER BY depth ASC, from_task_id ASC, to_task_id ASC
+      `,
+    )
+    .all(taskId) as Array<{ from_task_id: string; to_task_id: string; depth: number }>;
+
+  const nodeIds = new Set<string>([taskId]);
+  for (const edge of edges) {
+    nodeIds.add(edge.from_task_id);
+    nodeIds.add(edge.to_task_id);
+  }
+
+  const nodes: TaskDependencyNode[] = [];
+  for (const nodeId of nodeIds) {
+    const task = getTaskById(nodeId);
+    if (!task) {
+      continue;
+    }
+    nodes.push({
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      priority: task.priority,
+    });
+  }
+
+  const mappedEdges: TaskDependencyEdge[] = edges.map((edge) => ({
+    from: edge.from_task_id,
+    to: edge.to_task_id,
+    depth: edge.depth,
+  }));
+
+  const rootTask = getTaskById(taskId);
+  return {
+    task_id: taskId,
+    blocked_by: rootTask?.blocked_by ?? [],
+    nodes,
+    edges: mappedEdges,
+  };
+}
+
 function resolveProjectId(input: unknown, fallback: string): string {
   return typeof input === "string" && input.trim().length > 0 ? input.trim() : fallback;
 }
@@ -167,8 +310,8 @@ function broadcastAgentStatus(agentId: string | null): void {
 
 function updateAgentForTransition(
   taskId: string,
-  oldStatus: TaskStatus,
-  nextStatus: TaskStatus,
+  oldStatus: PersistedTaskStatus,
+  nextStatus: PersistedTaskStatus,
   agentId: string | null,
   actualDurationMin: number | null,
 ): void {
@@ -253,13 +396,15 @@ function parseSpawnOutput(stdout: string): {
 function createTaskFromDraft(
   draft: PromptTaskDraft,
   projectId: string,
-  options?: { status?: TaskStatus; agentId?: string | null },
+  options?: { status?: PersistedTaskStatus; agentId?: string | null },
 ) {
   const id = uuidv4();
   const now = nowIso();
   const status = options?.status ?? "queued";
   const agentId = options?.agentId ?? null;
   const reviews: TaskReviews = { codex: "pending", gemini: "pending", claude: "pending" };
+
+  validateTaskDependencies(id, projectId, draft.depends_on);
 
   const tx = db.transaction(() => {
     db.prepare(
@@ -312,6 +457,7 @@ router.get("/", (req, res) => {
   const { status, date, project_id } = req.query;
   const where: string[] = [];
   const params: unknown[] = [];
+  let statusFilter: TaskStatus | undefined;
 
   const queryProjectId = typeof project_id === "string" ? project_id : undefined;
   const effectiveProjectId = resolveProjectId(queryProjectId, req.apiKey?.project_id ?? DEFAULT_PROJECT_ID);
@@ -323,8 +469,13 @@ router.get("/", (req, res) => {
       res.status(400).json({ error: "status must be a valid task status" });
       return;
     }
-    where.push("status = ?");
-    params.push(status);
+    statusFilter = status;
+    if (statusFilter === "blocked" || statusFilter === "queued") {
+      where.push("status = 'queued'");
+    } else {
+      where.push("status = ?");
+      params.push(statusFilter);
+    }
   }
 
   if (date !== undefined) {
@@ -343,7 +494,17 @@ router.get("/", (req, res) => {
     ORDER BY datetime(COALESCE(scheduled_at, started_at, created_at)) DESC
   `;
 
-  res.json(listTasksByQuery(sql, params));
+  const tasks = listTasksByQuery(sql, params);
+  if (statusFilter === "blocked") {
+    res.json(tasks.filter((task) => task.status === "blocked"));
+    return;
+  }
+  if (statusFilter === "queued") {
+    res.json(tasks.filter((task) => task.status === "queued"));
+    return;
+  }
+
+  res.json(tasks);
 });
 
 router.post("/", (req, res) => {
@@ -359,7 +520,7 @@ router.post("/", (req, res) => {
     return;
   }
 
-  if (body.status !== undefined && !isTaskStatus(body.status)) {
+  if (body.status !== undefined && !isMutableTaskStatus(body.status)) {
     res.status(400).json({ error: "status is invalid" });
     return;
   }
@@ -442,6 +603,13 @@ router.post("/", (req, res) => {
   const description = typeof body.description === "string" ? body.description : "";
   const projectId = resolveProjectId(body.project_id, req.apiKey?.project_id ?? DEFAULT_PROJECT_ID);
 
+  try {
+    validateTaskDependencies(id, projectId, dependsOn);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "invalid dependencies" });
+    return;
+  }
+
   const tx = db.transaction(() => {
     db.prepare(
       `
@@ -503,6 +671,7 @@ router.post("/", (req, res) => {
       status: task.status,
     },
   });
+  void triggerTaskScheduler();
   res.status(201).json(task);
 });
 
@@ -551,8 +720,11 @@ router.post("/from-prompt", async (req, res) => {
     task = createTaskFromDraft(parsedResult.parsed, projectId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "task creation failed";
-    if (typeof message === "string" && message.includes("FOREIGN KEY constraint failed")) {
-      res.status(400).json({ error: "depends_on contains unknown task ids" });
+    if (
+      typeof message === "string" &&
+      (message.includes("depends_on") || message.includes("dependency cycle"))
+    ) {
+      res.status(400).json({ error: message });
       return;
     }
     res.status(500).json({ error: message });
@@ -578,6 +750,7 @@ router.post("/from-prompt", async (req, res) => {
       parser_fallback: parsedResult.parser.fallback,
     },
   });
+  void triggerTaskScheduler();
 
   res.status(201).json({
     task,
@@ -585,6 +758,16 @@ router.post("/from-prompt", async (req, res) => {
     parser: parsedResult.parser,
     dry_run: false,
   });
+});
+
+router.get("/:id/dependencies", (req, res) => {
+  const task = getTaskById(req.params.id);
+  if (!task) {
+    res.status(404).json({ error: "task not found" });
+    return;
+  }
+
+  res.json(buildTaskDependencyTree(task.id));
 });
 
 router.get("/:id", (req, res) => {
@@ -621,7 +804,7 @@ router.put("/:id", (req, res) => {
     params.push(value);
   };
 
-  let nextStatus: TaskStatus = existing.status;
+  let nextStatus: PersistedTaskStatus = existing.status;
   let nextAgentId: string | null = existing.agent_id;
   let nextProjectId: string = existing.project_id || DEFAULT_PROJECT_ID;
   let nextStartedAt: string | null = normalizeIso(existing.started_at);
@@ -645,7 +828,7 @@ router.put("/:id", (req, res) => {
     }
 
     if ("status" in body) {
-      if (!isTaskStatus(body.status)) {
+      if (!isMutableTaskStatus(body.status)) {
         throw new Error("status is invalid");
       }
       nextStatus = body.status;
@@ -780,6 +963,16 @@ router.put("/:id", (req, res) => {
     return;
   }
 
+  if (nextDependsOn || ("project_id" in body && typeof body.project_id === "string")) {
+    const effectiveDependsOn = nextDependsOn ?? getTaskDependencies(id);
+    try {
+      validateTaskDependencies(id, nextProjectId, effectiveDependsOn);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "invalid dependencies" });
+      return;
+    }
+  }
+
   const now = nowIso();
 
   if (nextStatus === "running" && !nextStartedAt) {
@@ -856,6 +1049,10 @@ router.put("/:id", (req, res) => {
     });
   }
 
+  if (existing.status !== nextStatus || nextDependsOn !== null) {
+    void triggerTaskScheduler();
+  }
+
   res.json(updatedTask);
 });
 
@@ -884,6 +1081,7 @@ router.delete("/:id", (req, res) => {
     action: "task.deleted",
     details: { task_id: id, title: existing.title },
   });
+  void triggerTaskScheduler();
 
   res.status(204).send();
 });
@@ -906,6 +1104,16 @@ router.post("/:id/spawn", async (req, res, next) => {
         return;
       }
       agentId = body.agent_id ? String(body.agent_id) : null;
+    }
+
+    const gate = canTaskStart(id);
+    if (!gate.ok) {
+      res.status(409).json({
+        error: gate.reason ?? "task cannot be started",
+        blocked_by: gate.blocked_by,
+        queue: getQueueStatus(),
+      });
+      return;
     }
 
     const description = existing.description || existing.title;
@@ -1054,6 +1262,7 @@ router.post("/:id/kill", async (req, res, next) => {
       action: "task.failed",
       details: { task_id: task.id, reason: "killed" },
     });
+    void triggerTaskScheduler();
     res.json({ task, execution });
   } catch (error) {
     next(error);
@@ -1108,6 +1317,7 @@ router.post("/:id/retry", (req, res) => {
     action: "task.retried",
     details: { task_id: task.id, retry_count: task.retry_count },
   });
+  void triggerTaskScheduler();
   res.json(task);
 });
 

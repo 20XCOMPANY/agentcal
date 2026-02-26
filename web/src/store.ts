@@ -1,5 +1,11 @@
+/**
+ * [INPUT]: Depends on Zustand, API client methods, and shared web domain types.
+ * [OUTPUT]: Exposes global UI/data store actions for projects, tasks, agents, activities, and queue state.
+ * [POS]: Frontend single source of truth coordinating page state and realtime updates.
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import { create } from "zustand";
-import type { Task, Agent, CalendarView, Project, Activity } from "@/types";
+import type { Task, Agent, CalendarView, Project, Activity, QueueStatus } from "@/types";
 import * as api from "@/api/client";
 import { format, startOfWeek, startOfMonth } from "date-fns";
 
@@ -47,6 +53,10 @@ interface AppState {
   // Command palette
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
+
+  // Queue
+  queueStatus: QueueStatus | null;
+  loadQueueStatus: () => Promise<void>;
 
   // Agents
   agents: Agent[];
@@ -158,6 +168,16 @@ export const useStore = create<AppState>((set, get) => ({
 
   commandPaletteOpen: false,
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+
+  queueStatus: null,
+  loadQueueStatus: async () => {
+    try {
+      const queueStatus = await api.fetchSystemQueue();
+      set({ queueStatus });
+    } catch {
+      set({ queueStatus: null });
+    }
+  },
 
   agents: [],
   loadAgents: async () => {

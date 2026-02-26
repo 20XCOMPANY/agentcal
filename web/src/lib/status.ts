@@ -1,7 +1,14 @@
+/**
+ * [INPUT]: Depends on shared task status/priority enums from web types.
+ * [OUTPUT]: Exposes status labels, emoji, and badge class helpers for consistent task UI rendering.
+ * [POS]: Presentation utility layer for task state semantics across calendar/detail components.
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import type { TaskStatus, TaskPriority } from "@/types";
 import clsx from "clsx";
 
 export const statusColor: Record<TaskStatus, string> = {
+  blocked: "bg-amber-500",
   running: "bg-green-500",
   queued: "bg-yellow-400",
   pr_open: "bg-blue-500",
@@ -11,6 +18,7 @@ export const statusColor: Record<TaskStatus, string> = {
 };
 
 export const statusEmoji: Record<TaskStatus, string> = {
+  blocked: "⛔",
   running: "🟢",
   queued: "🟡",
   pr_open: "🔵",
@@ -20,6 +28,7 @@ export const statusEmoji: Record<TaskStatus, string> = {
 };
 
 export const statusLabel: Record<TaskStatus, string> = {
+  blocked: "Blocked",
   running: "Running",
   queued: "Queued",
   pr_open: "PR Open",
@@ -41,6 +50,8 @@ export function statusBadgeClass(status: TaskStatus) {
     {
       "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300":
         status === "running",
+      "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300":
+        status === "blocked",
       "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300":
         status === "queued",
       "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300":

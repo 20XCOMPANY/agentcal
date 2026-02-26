@@ -1,4 +1,10 @@
-import { useState } from "react";
+/**
+ * [INPUT]: Depends on selected task/store state and task action/dependency APIs.
+ * [OUTPUT]: Renders task detail drawer with lifecycle actions, dependency graph, and queue metadata.
+ * [POS]: Task inspection and control surface for runtime execution workflows.
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
+import { useEffect, useState } from "react";
 import { useStore } from "@/store";
 import { statusBadgeClass, statusLabel, statusEmoji } from "@/lib/status";
 import { X, Play, RotateCcw, Skull, ArrowRightLeft, ExternalLink } from "lucide-react";
@@ -6,6 +12,7 @@ import * as api from "@/api/client";
 
 import clsx from "clsx";
 import { format } from "date-fns";
+import type { TaskDependencyTree } from "@/types";
 
 export function TaskDetailPanel() {
   const task = useStore((s) => s.selectedTask);
@@ -13,13 +20,53 @@ export function TaskDetailPanel() {
   const setDetailOpen = useStore((s) => s.setDetailOpen);
   const agents = useStore((s) => s.agents);
   const upsertTask = useStore((s) => s.upsertTask);
+  const queueStatus = useStore((s) => s.queueStatus);
+  const loadQueueStatus = useStore((s) => s.loadQueueStatus);
 
   const [redirectMsg, setRedirectMsg] = useState("");
   const [loading, setLoading] = useState<string | null>(null);
+  const [dependencyTree, setDependencyTree] = useState<TaskDependencyTree | null>(null);
+  const [dependencyError, setDependencyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!task?.id) {
+      setDependencyTree(null);
+      setDependencyError(null);
+      return;
+    }
+
+    let cancelled = false;
+    api
+      .fetchTaskDependencies(task.id)
+      .then((tree) => {
+        if (!cancelled) {
+          setDependencyTree(tree);
+          setDependencyError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setDependencyTree(null);
+          setDependencyError(error instanceof Error ? error.message : "failed to load dependency tree");
+        }
+      });
+
+    void loadQueueStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [task?.id, loadQueueStatus]);
 
   if (!task) return null;
 
   const agent = agents.find((a) => a.id === task.agent_id);
+  const queueEntry =
+    queueStatus?.queued_tasks.find((entry) => entry.task.id === task.id) ??
+    queueStatus?.blocked_tasks.find((entry) => entry.task.id === task.id) ??
+    null;
+  const dependencyNodeMap = new Map(
+    (dependencyTree?.nodes ?? []).map((node) => [node.id, node]),
+  );
 
   async function action(name: string, fn: () => Promise<unknown>) {
     setLoading(name);
@@ -126,6 +173,43 @@ export function TaskDetailPanel() {
                   <p>{task.actual_duration_min} min</p>
                 </div>
               )}
+              {queueEntry?.queue_position ? (
+                <div>
+                  <span className="text-neutral-500">Queue</span>
+                  <p>#{queueEntry.queue_position}</p>
+                </div>
+              ) : null}
+            </div>
+
+            <div>
+              <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-neutral-500">
+                Dependencies
+              </h3>
+              {dependencyError ? (
+                <p className="text-xs text-red-500">{dependencyError}</p>
+              ) : (
+                <div className="space-y-2 text-xs">
+                  <p className="text-neutral-500">
+                    Direct: {task.depends_on.length > 0 ? task.depends_on.join(", ") : "None"}
+                  </p>
+                  <p className={task.blocked_by.length > 0 ? "text-amber-600" : "text-neutral-500"}>
+                    Blocked By: {task.blocked_by.length > 0 ? task.blocked_by.join(", ") : "None"}
+                  </p>
+                  {(dependencyTree?.edges.length ?? 0) > 0 ? (
+                    <div className="rounded border border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-700 dark:bg-neutral-800/40">
+                      {(dependencyTree?.edges ?? []).map((edge) => {
+                        const from = dependencyNodeMap.get(edge.from);
+                        const to = dependencyNodeMap.get(edge.to);
+                        return (
+                          <p key={`${edge.from}-${edge.to}-${edge.depth}`} className="font-mono">
+                            {(from?.title ?? edge.from).slice(0, 32)} -&gt; {(to?.title ?? edge.to).slice(0, 32)}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              )}
             </div>
 
             {/* Reviews */}
@@ -187,14 +271,18 @@ export function TaskDetailPanel() {
                 Actions
               </h3>
               <div className="flex flex-wrap gap-2">
-                {task.status === "queued" && (
+                {(task.status === "queued" || task.status === "blocked") && (
                   <button
-                    disabled={loading === "spawn"}
+                    disabled={loading === "spawn" || task.status === "blocked"}
                     onClick={() => action("spawn", () => api.spawnTask(task.id))}
                     className="inline-flex items-center gap-1.5 rounded bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
                   >
                     <Play size={14} />
-                    {loading === "spawn" ? "Spawning..." : "Spawn Agent"}
+                    {task.status === "blocked"
+                      ? "Blocked by Dependencies"
+                      : loading === "spawn"
+                        ? "Spawning..."
+                        : "Spawn Agent"}
                   </button>
                 )}
                 {task.status === "running" && (

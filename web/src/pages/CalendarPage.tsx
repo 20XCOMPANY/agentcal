@@ -41,12 +41,19 @@ export function CalendarPage() {
   const setSelectedTask = useStore((s) => s.setSelectedTask);
   const setCreateModalOpen = useStore((s) => s.setCreateModalOpen);
   const loadAgents = useStore((s) => s.loadAgents);
+  const queueStatus = useStore((s) => s.queueStatus);
+  const loadQueueStatus = useStore((s) => s.loadQueueStatus);
   const currentProject = useStore((s) => s.currentProject);
 
   useEffect(() => {
     loadCalendarTasks();
     loadAgents();
-  }, [calendarView, calendarDate, currentProject, loadAgents, loadCalendarTasks]);
+    loadQueueStatus();
+  }, [calendarView, calendarDate, currentProject, loadAgents, loadCalendarTasks, loadQueueStatus]);
+
+  const queuePositionByTaskId = new Map(
+    (queueStatus?.queued_tasks ?? []).map((entry) => [entry.task.id, entry.queue_position ?? 0]),
+  );
 
   function navigate(dir: -1 | 1) {
     if (calendarView === "week")
@@ -130,6 +137,7 @@ export function CalendarPage() {
         <WeekView
           date={calendarDate}
           tasks={calendarTasks}
+          queuePositionByTaskId={queuePositionByTaskId}
           onTaskClick={setSelectedTask}
         />
       )}
@@ -137,6 +145,7 @@ export function CalendarPage() {
         <MonthView
           date={calendarDate}
           tasks={calendarTasks}
+          queuePositionByTaskId={queuePositionByTaskId}
           onTaskClick={setSelectedTask}
         />
       )}
@@ -144,6 +153,7 @@ export function CalendarPage() {
         <DayView
           date={calendarDate}
           tasks={calendarTasks}
+          queuePositionByTaskId={queuePositionByTaskId}
           onTaskClick={setSelectedTask}
         />
       )}
@@ -158,7 +168,15 @@ function tasksForDay(tasks: Task[], day: Date) {
   });
 }
 
-function TaskBlock({ task, onClick }: { task: Task; onClick: () => void }) {
+function TaskBlock({
+  task,
+  queuePosition,
+  onClick,
+}: {
+  task: Task;
+  queuePosition?: number;
+  onClick: () => void;
+}) {
   return (
     <button
       onClick={onClick}
@@ -169,6 +187,14 @@ function TaskBlock({ task, onClick }: { task: Task; onClick: () => void }) {
     >
       <span className="mr-1">{statusEmoji[task.status]}</span>
       <span className="truncate font-medium">{task.title}</span>
+      <div className="mt-1 text-[10px] text-neutral-500">
+        {task.blocked_by.length > 0
+          ? `Blocked by ${task.blocked_by.length}`
+          : task.depends_on.length > 0
+            ? `Depends on ${task.depends_on.length}`
+            : "No dependencies"}
+        {typeof queuePosition === "number" && queuePosition > 0 ? ` · Queue #${queuePosition}` : ""}
+      </div>
     </button>
   );
 }
@@ -176,10 +202,12 @@ function TaskBlock({ task, onClick }: { task: Task; onClick: () => void }) {
 function WeekView({
   date,
   tasks,
+  queuePositionByTaskId,
   onTaskClick,
 }: {
   date: Date;
   tasks: Task[];
+  queuePositionByTaskId: Map<string, number>;
   onTaskClick: (t: Task) => void;
 }) {
   const start = startOfWeek(date, { weekStartsOn: 1 });
@@ -222,6 +250,7 @@ function WeekView({
                 <TaskBlock
                   key={t.id}
                   task={t}
+                  queuePosition={queuePositionByTaskId.get(t.id)}
                   onClick={() => onTaskClick(t)}
                 />
               ))}
@@ -241,10 +270,12 @@ function WeekView({
 function MonthView({
   date,
   tasks,
+  queuePositionByTaskId,
   onTaskClick,
 }: {
   date: Date;
   tasks: Task[];
+  queuePositionByTaskId: Map<string, number>;
   onTaskClick: (t: Task) => void;
 }) {
   const monthStart = startOfMonth(date);
@@ -304,6 +335,7 @@ function MonthView({
                       <TaskBlock
                         key={t.id}
                         task={t}
+                        queuePosition={queuePositionByTaskId.get(t.id)}
                         onClick={() => onTaskClick(t)}
                       />
                     ))}
@@ -326,10 +358,12 @@ function MonthView({
 function DayView({
   date,
   tasks,
+  queuePositionByTaskId,
   onTaskClick,
 }: {
   date: Date;
   tasks: Task[];
+  queuePositionByTaskId: Map<string, number>;
   onTaskClick: (t: Task) => void;
 }) {
   const dayTasks = tasksForDay(tasks, date);
@@ -353,6 +387,8 @@ function DayView({
                 <p className="truncate text-sm font-medium">{t.title}</p>
                 <p className="text-xs text-neutral-500">
                   {t.agent_type} · {t.priority}
+                  {t.blocked_by.length > 0 ? ` · blocked(${t.blocked_by.length})` : ""}
+                  {queuePositionByTaskId.get(t.id) ? ` · queue #${queuePositionByTaskId.get(t.id)}` : ""}
                 </p>
               </div>
               <span className={statusBadgeClass(t.status)}>

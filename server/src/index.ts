@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: Depends on route modules, DB lifecycle, sync scheduler, and task scheduler services.
+ * [OUTPUT]: Boots the HTTP/WebSocket server and wires graceful shutdown hooks.
+ * [POS]: Server runtime entrypoint coordinating middleware, routers, and background schedulers.
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import http from "node:http";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
@@ -11,6 +17,7 @@ import { createSystemRouter } from "./routes/system";
 import tasksRouter from "./routes/tasks";
 import webhooksRouter from "./routes/webhooks";
 import { startSyncScheduler, stopSyncScheduler, triggerManualSync } from "./services/sync";
+import { startTaskScheduler, stopTaskScheduler } from "./services/task-scheduler";
 import { setupWebSocketServer } from "./ws";
 
 const app = express();
@@ -65,11 +72,13 @@ server.listen(port, () => {
   console.log(`[agentcal] server listening on http://localhost:${port}`);
   console.log(`[agentcal] sqlite database: ${DB_PATH}`);
   startSyncScheduler(10_000);
+  startTaskScheduler(30_000);
 });
 
 function shutdown(signal: string): void {
   console.log(`[agentcal] received ${signal}, shutting down`);
   stopSyncScheduler();
+  stopTaskScheduler();
 
   server.close(() => {
     closeDb();

@@ -6,7 +6,14 @@
  */
 export type AgentType = "codex" | "claude";
 export type AgentStatus = "idle" | "busy" | "offline";
-export type TaskStatus = "queued" | "running" | "pr_open" | "completed" | "failed" | "archived";
+export type TaskStatus =
+  | "blocked"
+  | "queued"
+  | "running"
+  | "pr_open"
+  | "completed"
+  | "failed"
+  | "archived";
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 export type CIStatus = "pending" | "passing" | "failing" | null;
 export type ReviewStatus = "pending" | "approved" | "rejected";
@@ -53,6 +60,7 @@ export interface Task {
   retry_count: number;
   max_retries: number;
   depends_on: string[];
+  blocked_by: string[];
   scheduled_at: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -92,6 +100,25 @@ export interface SystemStatus {
     stdout: string;
     stderr: string;
   } | null;
+}
+
+export interface SystemConfig {
+  max_concurrent_agents: number;
+}
+
+export interface QueueTaskEntry {
+  task: Task;
+  queue_position: number | null;
+}
+
+export interface QueueStatus {
+  generated_at: string;
+  max_concurrent_agents: number;
+  running_count: number;
+  available_slots: number;
+  running_tasks: Task[];
+  queued_tasks: QueueTaskEntry[];
+  blocked_tasks: QueueTaskEntry[];
 }
 
 export interface SystemStats {
@@ -209,6 +236,26 @@ export interface PromptTaskFromPromptResponse {
   parser: PromptParserMeta;
   task?: Task;
   dry_run: boolean;
+}
+
+export interface TaskDependencyNode {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+}
+
+export interface TaskDependencyEdge {
+  from: string;
+  to: string;
+  depth: number;
+}
+
+export interface TaskDependencyTree {
+  task_id: string;
+  blocked_by: string[];
+  nodes: TaskDependencyNode[];
+  edges: TaskDependencyEdge[];
 }
 
 export interface WSEvent<T = unknown> {
