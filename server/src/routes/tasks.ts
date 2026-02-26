@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 ../db 的任务持久化能力与 ../services/prompt-parser 的语义解析能力。
+ * [OUTPUT]: 对外提供 tasks 全生命周期 REST 路由，包括 Prompt-to-Task 创建入口。
+ * [POS]: server 路由层任务核心编排器，连接 API 输入、数据库写入与活动广播。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import { Router } from "express";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -12,9 +18,11 @@ import {
 } from "../db";
 import { killAgent, redirectAgent, spawnAgent } from "../services/agent-swarm";
 import { recordActivity } from "../services/activity";
+import { parsePromptToTaskDraft } from "../services/prompt-parser";
 import type {
   AgentRow,
   CIStatus,
+  PromptTaskDraft,
   ReviewStatus,
   TaskPriority,
   TaskReviews,
@@ -242,6 +250,62 @@ function parseSpawnOutput(stdout: string): {
   };
 }
 
+function createTaskFromDraft(
+  draft: PromptTaskDraft,
+  projectId: string,
+  options?: { status?: TaskStatus; agentId?: string | null },
+) {
+  const id = uuidv4();
+  const now = nowIso();
+  const status = options?.status ?? "queued";
+  const agentId = options?.agentId ?? null;
+  const reviews: TaskReviews = { codex: "pending", gemini: "pending", claude: "pending" };
+
+  const tx = db.transaction(() => {
+    db.prepare(
+      `
+        INSERT INTO tasks (
+          id, project_id, title, description, status, priority, agent_type, agent_id,
+          review_codex, review_gemini, review_claude,
+          retry_count, max_retries, scheduled_at,
+          estimated_duration_min,
+          created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 3, ?, 30, ?, ?)
+      `,
+    ).run(
+      id,
+      projectId,
+      draft.title,
+      draft.description,
+      status,
+      draft.priority,
+      draft.agent_type,
+      agentId,
+      reviews.codex,
+      reviews.gemini,
+      reviews.claude,
+      draft.scheduled_at,
+      now,
+      now,
+    );
+
+    if (draft.depends_on.length > 0) {
+      const depStmt = db.prepare(
+        "INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)",
+      );
+      for (const dependsOnId of draft.depends_on) {
+        depStmt.run(id, dependsOnId);
+      }
+    }
+
+    taskEvent(id, "created", null, status);
+  });
+
+  tx();
+  return getTaskById(id);
+}
+
 const router = Router();
 
 router.get("/", (req, res) => {
@@ -440,6 +504,87 @@ router.post("/", (req, res) => {
     },
   });
   res.status(201).json(task);
+});
+
+router.post("/from-prompt", async (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  if (!prompt) {
+    res.status(400).json({ error: "prompt is required" });
+    return;
+  }
+
+  if (body.project_id !== undefined && (typeof body.project_id !== "string" || !body.project_id.trim())) {
+    res.status(400).json({ error: "project_id must be a non-empty string when provided" });
+    return;
+  }
+
+  if (body.dry_run !== undefined && typeof body.dry_run !== "boolean") {
+    res.status(400).json({ error: "dry_run must be a boolean when provided" });
+    return;
+  }
+
+  const dryRun = body.dry_run === true;
+  const projectId = resolveProjectId(body.project_id, req.apiKey?.project_id ?? DEFAULT_PROJECT_ID);
+
+  let parsedResult;
+  try {
+    parsedResult = await parsePromptToTaskDraft(prompt);
+  } catch (error) {
+    res.status(502).json({
+      error: error instanceof Error ? error.message : "failed to parse prompt",
+    });
+    return;
+  }
+
+  if (dryRun) {
+    res.json({
+      parsed: parsedResult.parsed,
+      parser: parsedResult.parser,
+      dry_run: true,
+    });
+    return;
+  }
+
+  let task;
+  try {
+    task = createTaskFromDraft(parsedResult.parsed, projectId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "task creation failed";
+    if (typeof message === "string" && message.includes("FOREIGN KEY constraint failed")) {
+      res.status(400).json({ error: "depends_on contains unknown task ids" });
+      return;
+    }
+    res.status(500).json({ error: message });
+    return;
+  }
+
+  if (!task) {
+    res.status(500).json({ error: "task creation failed" });
+    return;
+  }
+
+  broadcast("task:created", { task });
+  recordActivity({
+    projectId,
+    agentId: task.agent_id,
+    action: "task.created",
+    details: {
+      task_id: task.id,
+      title: task.title,
+      status: task.status,
+      source: "from_prompt",
+      parser_provider: parsedResult.parser.provider,
+      parser_fallback: parsedResult.parser.fallback,
+    },
+  });
+
+  res.status(201).json({
+    task,
+    parsed: parsedResult.parsed,
+    parser: parsedResult.parser,
+    dry_run: false,
+  });
 });
 
 router.get("/:id", (req, res) => {

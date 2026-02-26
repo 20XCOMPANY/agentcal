@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 store 的日历/任务状态与 PromptTaskComposer 的自然语言建任务入口。
+ * [OUTPUT]: 对外提供 CalendarPage，支持日历视图切换与 Prompt-to-Task 主界面交互。
+ * [POS]: web 日历主页面，是任务规划与调度的核心工作区。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import { useEffect } from "react";
 import { useStore } from "@/store";
 import {
@@ -19,6 +25,7 @@ import {
 } from "date-fns";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { statusEmoji, statusBadgeClass, statusLabel } from "@/lib/status";
+import { PromptTaskComposer } from "@/components/PromptTaskComposer";
 import type { Task, CalendarView } from "@/types";
 import clsx from "clsx";
 
@@ -115,6 +122,8 @@ export function CalendarPage() {
           </span>
         </div>
       </div>
+
+      <PromptTaskComposer />
 
       {/* Calendar grid */}
       {calendarView === "week" && (

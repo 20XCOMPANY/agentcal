@@ -9,9 +9,11 @@ src/hooks/useWebSocket.ts: WebSocket 客户端，消费 task/agent/activity 事�
 src/components/ActivityPanel.tsx: 活动流面板，展示 `action/details` 结构活动。
 src/components/CommandPalette.tsx: 命令面板，支持 Cmd/Ctrl 快捷键配合页面跳转与动作。
 src/components/CreateTaskModal.tsx: 新建任务弹窗，携带当前 `project_id` 创建任务。
+src/components/PromptTaskComposer.tsx: Notion-like Prompt-to-Task 输入区，实时解析预览并确认创建任务。
 src/pages/ApiKeysPage.tsx: API key 管理页，支持创建、复制、删除与一次性明文显示。
 src/pages/WebhooksPage.tsx: Webhook 管理页，支持事件订阅、启停、编辑、删除。
 src/pages/StatsPage.tsx: 统计页，适配新的后端 stats 结构。
+src/pages/CalendarPage.tsx: 日历主界面，内置 PromptTaskComposer 作为自然语言建任务入口。
 src/App.tsx: 应用壳，注册 `Cmd/Ctrl+K/L/N` 快捷键与主路由。
 
 目录结构
@@ -22,6 +24,7 @@ src/
 │   ├── ActivityPanel.tsx
 │   ├── CommandPalette.tsx
 │   ├── CreateTaskModal.tsx
+│   ├── PromptTaskComposer.tsx
 │   └── ...
 ├── hooks/
 │   └── useWebSocket.ts

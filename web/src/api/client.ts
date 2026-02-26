@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖浏览器 fetch 与 web/src/types 的 API 契约类型定义。
+ * [OUTPUT]: 对外提供统一 REST client，包括 Prompt-to-Task 解析/创建接口。
+ * [POS]: web 数据访问层，屏蔽请求细节供 store 与组件直接调用。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 const BASE = "/api";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -52,6 +58,16 @@ export const createTask = (data: import("@/types").CreateTaskPayload) =>
   request<import("@/types").Task>("/tasks", {
     method: "POST",
     body: JSON.stringify(data),
+  });
+export const parseTaskFromPrompt = (data: import("@/types").PromptTaskFromPromptPayload) =>
+  request<import("@/types").PromptTaskFromPromptResponse>("/tasks/from-prompt", {
+    method: "POST",
+    body: JSON.stringify({ ...data, dry_run: true }),
+  });
+export const createTaskFromPrompt = (data: import("@/types").PromptTaskFromPromptPayload) =>
+  request<import("@/types").PromptTaskFromPromptResponse>("/tasks/from-prompt", {
+    method: "POST",
+    body: JSON.stringify({ ...data, dry_run: false }),
   });
 export const updateTask = (id: string, data: Partial<import("@/types").Task>) =>
   request<import("@/types").Task>(`/tasks/${id}`, {

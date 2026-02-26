@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 server/db 的表结构与 routes/services 的任务生命周期约束。
+ * [OUTPUT]: 对外提供服务端领域类型（Agent/Task/Prompt 解析）供路由和服务复用。
+ * [POS]: server 类型系统核心，统一校验与序列化边界。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 export type AgentType = "codex" | "claude";
 export type AgentStatus = "idle" | "busy" | "offline";
 
@@ -126,6 +132,29 @@ export interface SyncResult {
   skipped: number;
   errors: string[];
   synced_at: string;
+}
+
+export interface PromptTaskDraft {
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  agent_type: AgentType;
+  scheduled_at: string | null;
+  depends_on: string[];
+}
+
+export type PromptParserProvider = "openai" | "anthropic" | "fallback";
+
+export interface PromptParserMeta {
+  provider: PromptParserProvider;
+  model: string | null;
+  fallback: boolean;
+  reason?: string;
+}
+
+export interface PromptTaskParseResult {
+  parsed: PromptTaskDraft;
+  parser: PromptParserMeta;
 }
 
 // Multi-project workspace types
