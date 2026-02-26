@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖后端 API 返回结构与前端页面/状态管理的消费需求。
+ * [OUTPUT]: 对外提供 web 端领域类型与 Prompt-to-Task 请求/响应契约。
+ * [POS]: web 类型单一真相源，约束 API client/store/components 的边界一致性。
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 export type AgentType = "codex" | "claude";
 export type AgentStatus = "idle" | "busy" | "offline";
 export type TaskStatus = "queued" | "running" | "pr_open" | "completed" | "failed" | "archived";
@@ -172,6 +178,37 @@ export interface CreateTaskPayload {
   project_id?: string;
   scheduled_at?: string | null;
   depends_on?: string[];
+}
+
+export interface PromptTaskDraft {
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  agent_type: AgentType;
+  scheduled_at: string | null;
+  depends_on: string[];
+}
+
+export type PromptParserProvider = "openai" | "anthropic" | "fallback";
+
+export interface PromptParserMeta {
+  provider: PromptParserProvider;
+  model: string | null;
+  fallback: boolean;
+  reason?: string;
+}
+
+export interface PromptTaskFromPromptPayload {
+  prompt: string;
+  project_id?: string;
+  dry_run?: boolean;
+}
+
+export interface PromptTaskFromPromptResponse {
+  parsed: PromptTaskDraft;
+  parser: PromptParserMeta;
+  task?: Task;
+  dry_run: boolean;
 }
 
 export interface WSEvent<T = unknown> {

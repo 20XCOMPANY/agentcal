@@ -8,11 +8,12 @@ src/middleware/api-auth.ts: Bearer/x-api-key 认证中间件，向请求注入 `
 src/routes/auth.ts: `/api/auth/token`，为远程 agent 签发 API token。
 src/routes/agents.ts: 代理 CRUD 与 profile 扩展字段处理，写入活动流并广播状态。
 src/routes/projects.ts: 项目路由聚合，提供 projects/agents/activities/keys/webhooks 子资源。
-src/routes/tasks.ts: 任务全生命周期路由，支持 `project_id` 并写入实时活动流。
+src/routes/tasks.ts: 任务全生命周期路由，支持 `project_id`、`/from-prompt` 自然语言建任务并写入实时活动流。
 src/routes/webhooks.ts: 顶级 `/api/webhooks` 与 `/api/webhooks/events` 远程事件入口。
 src/routes/calendar.ts: 日历聚合查询，按项目过滤任务视图。
 src/services/activity.ts: 活动日志写入与查询服务，统一 WebSocket `activity:created` 推送。
 src/services/auth.ts: API key 生成、解析、校验、脱敏服务。
+src/services/prompt-parser.ts: Prompt-to-Task 解析服务，支持 OpenAI/Anthropic 与规则 fallback。
 src/services/sync.ts: active-tasks 同步服务，已支持 `project_id`。
 src/ws.ts: WebSocket 初始化与事件广播。
 
@@ -33,6 +34,7 @@ src/
 │   ├── activity.ts
 │   ├── agent-swarm.ts
 │   ├── auth.ts
+│   ├── prompt-parser.ts
 │   └── sync.ts
 ├── types.ts
 └── ws.ts
