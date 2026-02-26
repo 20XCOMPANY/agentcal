@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: Depends on active-tasks JSON projection, DB persistence helpers, and WS broadcast service.
+ * [OUTPUT]: Provides periodic/manual sync from external task projection into local SQLite tables.
+ * [POS]: Compatibility ingest bridge between external orchestrators and AgentCal task records.
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -112,6 +118,9 @@ function asStringArray(value: unknown): string[] {
 
 function mapTaskStatus(value: unknown): TaskStatus {
   const raw = String(value ?? "").toLowerCase();
+  if (["blocked", "blocked_by_dependency"].includes(raw)) {
+    return "queued";
+  }
   if (["queued", "queue", "pending"].includes(raw)) {
     return "queued";
   }

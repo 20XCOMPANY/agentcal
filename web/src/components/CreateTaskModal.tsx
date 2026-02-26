@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: Depends on store modal/project context and task creation API client.
+ * [OUTPUT]: Provides task creation modal with scheduling, priority, agent type, and dependency inputs.
+ * [POS]: Manual task authoring entrypoint used across calendar workflows.
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import { useState } from "react";
 import { useStore } from "@/store";
 import { X } from "lucide-react";
@@ -16,6 +22,7 @@ export function CreateTaskModal() {
   const [priority, setPriority] = useState<TaskPriority>("medium");
   const [agentType, setAgentType] = useState<AgentType>("codex");
   const [scheduledAt, setScheduledAt] = useState("");
+  const [dependsOn, setDependsOn] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   if (!open) return null;
@@ -26,6 +33,7 @@ export function CreateTaskModal() {
     setPriority("medium");
     setAgentType("codex");
     setScheduledAt("");
+    setDependsOn("");
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -40,6 +48,10 @@ export function CreateTaskModal() {
         agent_type: agentType,
         project_id: currentProject.id,
         scheduled_at: scheduledAt || undefined,
+        depends_on: dependsOn
+          .split(",")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0),
       };
       const task = await api.createTask(payload);
       upsertTask(task);
@@ -143,6 +155,18 @@ export function CreateTaskModal() {
                 value={scheduledAt}
                 onChange={(e) => setScheduledAt(e.target.value)}
                 className="w-full rounded border border-neutral-300 bg-transparent px-3 py-2 text-sm dark:border-neutral-600"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                Depends On (task IDs)
+              </label>
+              <input
+                value={dependsOn}
+                onChange={(e) => setDependsOn(e.target.value)}
+                className="w-full rounded border border-neutral-300 bg-transparent px-3 py-2 text-sm dark:border-neutral-600"
+                placeholder="task-1, task-2"
               />
             </div>
           </div>

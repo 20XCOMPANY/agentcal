@@ -8,12 +8,14 @@ export type AgentType = "codex" | "claude";
 export type AgentStatus = "idle" | "busy" | "offline";
 
 export type TaskStatus =
+  | "blocked"
   | "queued"
   | "running"
   | "pr_open"
   | "completed"
   | "failed"
   | "archived";
+export type PersistedTaskStatus = Exclude<TaskStatus, "blocked">;
 
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
 export type CIStatus = "pending" | "passing" | "failing" | null;
@@ -61,6 +63,7 @@ export interface Task {
   retry_count: number;
   max_retries: number;
   depends_on: string[];
+  blocked_by: string[];
   scheduled_at: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -93,7 +96,7 @@ export interface TaskRow {
   project_id: string;
   title: string;
   description: string;
-  status: TaskStatus;
+  status: PersistedTaskStatus;
   priority: TaskPriority;
   agent_type: AgentType;
   agent_id: string | null;
@@ -132,6 +135,45 @@ export interface SyncResult {
   skipped: number;
   errors: string[];
   synced_at: string;
+}
+
+export interface TaskDependencyNode {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+}
+
+export interface TaskDependencyEdge {
+  from: string;
+  to: string;
+  depth: number;
+}
+
+export interface TaskDependencyTree {
+  task_id: string;
+  blocked_by: string[];
+  nodes: TaskDependencyNode[];
+  edges: TaskDependencyEdge[];
+}
+
+export interface QueueTaskEntry {
+  task: Task;
+  queue_position: number | null;
+}
+
+export interface QueueStatus {
+  generated_at: string;
+  max_concurrent_agents: number;
+  running_count: number;
+  available_slots: number;
+  running_tasks: Task[];
+  queued_tasks: QueueTaskEntry[];
+  blocked_tasks: QueueTaskEntry[];
+}
+
+export interface SystemConfig {
+  max_concurrent_agents: number;
 }
 
 export interface PromptTaskDraft {

@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: Depends on browser WebSocket API and store upsert/prepend actions.
+ * [OUTPUT]: Maintains realtime subscriptions for task/agent/activity events and queue refresh.
+ * [POS]: Frontend realtime bridge between backend WS events and Zustand state updates.
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import { useEffect, useRef } from "react";
 import { useStore } from "@/store";
 import type { Activity, Agent, Task, WSEvent } from "@/types";
@@ -7,6 +13,7 @@ export function useWebSocket() {
   const upsertTask = useStore((s) => s.upsertTask);
   const upsertAgent = useStore((s) => s.upsertAgent);
   const prependActivity = useStore((s) => s.prependActivity);
+  const loadQueueStatus = useStore((s) => s.loadQueueStatus);
   const currentProject = useStore((s) => s.currentProject);
 
   useEffect(() => {
@@ -32,6 +39,7 @@ export function useWebSocket() {
             const task = (data as { task?: Task }).task;
             if (task) {
               upsertTask(task);
+              void loadQueueStatus();
             }
           } else if (event === "agent:status") {
             const agent = (data as { agent?: Agent }).agent;
@@ -64,5 +72,5 @@ export function useWebSocket() {
       clearTimeout(reconnectTimer);
       ws?.close();
     };
-  }, [currentProject, prependActivity, upsertTask, upsertAgent]);
+  }, [currentProject, prependActivity, upsertTask, upsertAgent, loadQueueStatus]);
 }

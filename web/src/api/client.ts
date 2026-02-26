@@ -54,6 +54,8 @@ export const updateAgent = (id: string, data: Partial<import("@/types").Agent>) 
 export const fetchTasks = (params?: Record<string, string>) =>
   request<import("@/types").Task[]>(withQuery("/tasks", params ?? {}));
 export const fetchTask = (id: string) => request<import("@/types").Task>(`/tasks/${id}`);
+export const fetchTaskDependencies = (id: string) =>
+  request<import("@/types").TaskDependencyTree>(`/tasks/${id}/dependencies`);
 export const createTask = (data: import("@/types").CreateTaskPayload) =>
   request<import("@/types").Task>("/tasks", {
     method: "POST",
@@ -107,6 +109,13 @@ export const fetchDaily = (date: string, projectId?: string) =>
 // System
 export const fetchSystemStatus = () => request<import("@/types").SystemStatus>("/system/status");
 export const fetchSystemStats = () => request<import("@/types").SystemStats>("/system/stats");
+export const fetchSystemQueue = () => request<import("@/types").QueueStatus>("/system/queue");
+export const fetchSystemConfig = () => request<import("@/types").SystemConfig>("/system/config");
+export const updateSystemConfig = (data: Partial<import("@/types").SystemConfig>) =>
+  request<import("@/types").SystemConfig>("/system/config", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 
 // Projects
 export const fetchProjects = () => request<import("@/types").Project[]>("/projects");

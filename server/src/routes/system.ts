@@ -1,7 +1,14 @@
+/**
+ * [INPUT]: Depends on system metrics, DB aggregate queries, sync trigger, and task scheduler config/queue services.
+ * [OUTPUT]: Exposes system status/stats APIs and queue/config management endpoints.
+ * [POS]: System route gateway for operational introspection and scheduler controls.
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
 import os from "node:os";
 import { Router } from "express";
 import { db, nowIso } from "../db";
 import { getAgentSwarmStatus } from "../services/agent-swarm";
+import { getQueueStatus, getSystemConfig, updateSystemConfig } from "../services/task-scheduler";
 import type { SyncResult } from "../types";
 
 interface SystemRouterOptions {
@@ -155,6 +162,32 @@ export function createSystemRouter(options: SystemRouterOptions): Router {
       completion_trend_30d: completionTrend,
       agent_utilization: agentUtilization,
     });
+  });
+
+  router.get("/queue", (_req, res) => {
+    res.json(getQueueStatus());
+  });
+
+  router.get("/config", (_req, res) => {
+    res.json(getSystemConfig());
+  });
+
+  router.put("/config", (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    if ("max_concurrent_agents" in body && typeof body.max_concurrent_agents !== "number") {
+      res.status(400).json({ error: "max_concurrent_agents must be a number" });
+      return;
+    }
+    try {
+      const config = updateSystemConfig({
+        max_concurrent_agents:
+          typeof body.max_concurrent_agents === "number" ? body.max_concurrent_agents : undefined,
+      });
+      res.json(config);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "invalid config payload";
+      res.status(400).json({ error: message });
+    }
   });
 
   return router;
