@@ -4,9 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "pnpm --filter @agentcal/server dev",
+    "dev:client": "pnpm --filter @agentcal/client dev",
+    "dev:all": "concurrently -k \"pnpm --filter @agentcal/server dev\" \"pnpm --filter @agentcal/client dev\"",
     "build": "pnpm --filter @agentcal/server build",
     "start": "pnpm --filter @agentcal/server start",
     "typecheck": "pnpm --filter @agentcal/server typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
