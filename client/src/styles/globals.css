@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+:root {
+  --radius: 8px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: radial-gradient(circle at top right, #f8fafc 0%, #f4f4f5 40%, #f8fafc 100%);
+  color: #0f172a;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+.dark body {
+  background: radial-gradient(circle at top right, #1f2937 0%, #0f172a 45%, #020617 100%);
+  color: #e5e7eb;
+}
+
+.panel {
+  border-radius: var(--radius);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}

@@ -17,6 +17,7 @@ pnpm-lock.yaml - Project file
 pnpm-workspace.yaml - Project file
 PRD.md - Project file
 REFACTOR_TASK.md - Project file
+client/AGENTS.md - Client module map
 server/AGENTS.md - Server module map
 tsconfig.json - Project file
 web/AGENTS.md - Web module map
